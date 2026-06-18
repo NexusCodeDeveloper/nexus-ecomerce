@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules # Evita que tu node_modules de Windows pise al de Linux del contenedor
+    env_file:
+      - ./backend/.env
+    environment:
+      - NODE_ENV=development
+      - CORS_ORIGIN=http://localhost:5173
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_PROXY_TARGET=http://backend:4000
