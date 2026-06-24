@@ -1,7 +1,7 @@
 function App() {
   return (
     <>
-      <h1>Hola nexusEcomerce</h1>
+      <h1>Hola desde nexusEcomerce</h1>
     </>
   );
 }
