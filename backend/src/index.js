@@ -19,7 +19,13 @@ app.use(
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
-
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "¡El backend de Nexus está vivo y respondiendo perfectamente!",
+    timestamp: new Date(),
+  });
+});
 app.listen(port, () => {
   console.log(`Servidor backend corriendo en http://localhost:${port}`);
 });
