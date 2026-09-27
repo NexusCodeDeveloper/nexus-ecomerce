@@ -19,7 +19,7 @@ export const proteger = async (req, res, next) => {
   }
 
   try {
-    const usuario = await Usuario.findById(decoded.id).select('nombre email rol versionToken permisos activo');
+    const usuario = await Usuario.findById(decoded.id).select('nombre email rol versionToken permisos activo tienda');
     if (!usuario) {
       return res.status(401).json({ message: 'Sesión inválida, usuario no encontrado' });
     }
@@ -35,6 +35,7 @@ export const proteger = async (req, res, next) => {
       nombre: usuario.nombre,
       email: usuario.email,
       rol: usuario.rol,
+      tienda: usuario.tienda ? usuario.tienda.toString() : null,
       permisos: usuario.permisos || [],
       activo: usuario.activo,
     };
@@ -45,7 +46,7 @@ export const proteger = async (req, res, next) => {
 };
 
 export const admin = (req, res, next) => {
-  if (req.usuario && req.usuario.rol === 'admin') {
+  if (req.usuario && ['admin', 'superadmin'].includes(req.usuario.rol)) {
     next();
   } else {
     res.status(403).json({ message: 'Acceso denegado, se requiere rol de administrador' });
