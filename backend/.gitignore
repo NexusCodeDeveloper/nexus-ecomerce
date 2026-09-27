@@ -1,2 +1,4 @@
-# Ignorar variables de entorno
+node_modules/
 .env
+.env.production
+.env.*.local
