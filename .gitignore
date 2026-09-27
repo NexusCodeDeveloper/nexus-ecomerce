@@ -1,6 +1,10 @@
-# Ignorar directorios de dependencias
-**/node_modules
-
-# Archivos de build y logs
-**/dist
-**/npm-debug.log
+node_modules/
+.env
+.env.production
+.env*.local
+dist/
+.vite/
+.vercel/
+*.log
+backups/
+logs/
