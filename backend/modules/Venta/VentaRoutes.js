@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { crearVenta, eliminarVenta, obtenerVentas, obtenerEstadisticasVentas, obtenerMasVendidos, abrirCaja, obtenerCajaAbierta, cerrarCaja, reabrirCaja, obtenerCierresCaja, eliminarCierreCaja, reenviarMailCierre, probarCorreo, estadoCorreo, ejecutarMigracion, migrarTickets } from './VentaController.js';
 import { proteger, admin } from '../../middlewares/AutenticacionMiddleware.js';
+import { resolverTienda } from '../../middlewares/TenantMiddleware.js';
 
 const router = Router();
 
-router.use(proteger);
+router.use(proteger, resolverTienda);
 
 router.post('/caja/abrir', abrirCaja);
 router.get('/caja/abierta', obtenerCajaAbierta);

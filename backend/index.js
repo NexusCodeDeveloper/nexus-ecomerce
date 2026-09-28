@@ -22,6 +22,7 @@ import UsuarioRoutes from './modules/Usuario/UsuarioRoutes.js';
 import PushRoutes from './modules/Push/PushRoutes.js';
 import ReporteErrorRoutes from './modules/ReporteError/ReporteErrorRoutes.js';
 import Usuario from './modules/Autenticacion/UsuarioModel.js';
+import Tienda from './modules/Tienda/TiendaModel.js';
 import Venta from './modules/Venta/VentaModel.js';
 import CierreCaja from './modules/Venta/CierreCajaModel.js';
 import { asegurarNumerosTicket, migrarArticulosVenta } from './modules/Venta/VentaController.js';
@@ -91,23 +92,50 @@ if (process.env.NODE_ENV === 'production') {
 
 validarCredencialesIniciales();
 
-const sembrarUsuario = async (nombre, email, clave, rol) => {
+const sembrarTiendaPorDefecto = async () => {
+  const slug = String(process.env.TIENDA_DEFAULT_SLUG || 'principal').trim().toLowerCase();
+  const nombre = process.env.TIENDA_DEFAULT_NOMBRE || 'Tienda principal';
+  let tienda = await Tienda.findOne({ slug });
+  if (!tienda) {
+    try {
+      tienda = await Tienda.create({
+        nombre,
+        slug,
+        estado: 'activa',
+        whatsapp: process.env.TIENDA_DEFAULT_WHATSAPP || '',
+      });
+      logger.info('Tienda por defecto creada', { slug });
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      tienda = await Tienda.findOne({ slug });
+    }
+  }
+  return tienda;
+};
+
+const sembrarUsuario = async (nombre, email, clave, rol, tienda) => {
   const emailNormalizado = String(email || '').trim().toLowerCase();
-  const existe = await Usuario.exists({ email: emailNormalizado });
-  if (existe) return;
+  const existente = await Usuario.findOne({ email: emailNormalizado });
+  if (existente) {
+    if (tienda && !existente.tienda) {
+      existente.tienda = tienda._id;
+      await existente.save();
+    }
+    return;
+  }
   try {
-    await Usuario.create({ nombre, email: emailNormalizado, clave, rol });
+    await Usuario.create({ nombre, email: emailNormalizado, clave, rol, tienda: tienda?._id });
   } catch (error) {
     if (error.code !== 11000) throw error;
   }
 };
 
-const sembrarUsuarios = async () => {
-  await sembrarUsuario('Admin', process.env.ADMIN_EMAIL, process.env.ADMIN_PASSWORD, 'admin');
+const sembrarUsuarios = async (tienda) => {
+  await sembrarUsuario('Admin', process.env.ADMIN_EMAIL, process.env.ADMIN_PASSWORD, 'admin', tienda);
   logger.debug('Usuario admin verificado');
 
   try {
-    await sembrarUsuario('Empleado', process.env.EMPLEADO_EMAIL, process.env.EMPLEADO_PASSWORD, 'user');
+    await sembrarUsuario('Empleado', process.env.EMPLEADO_EMAIL, process.env.EMPLEADO_PASSWORD, 'user', tienda);
     logger.debug('Usuario empleado verificado');
   } catch (error) {
     const d = describirError(error);
@@ -127,7 +155,8 @@ const inicializar = () => {
   if (!inicializarPromesa) {
     inicializarPromesa = (async () => {
       await connectDB();
-      await sembrarUsuarios();
+      const tienda = await sembrarTiendaPorDefecto();
+      await sembrarUsuarios(tienda);
       try {
         await Venta.init();
         await CierreCaja.init();

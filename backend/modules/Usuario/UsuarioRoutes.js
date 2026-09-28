@@ -8,10 +8,11 @@ import {
   eliminarUsuario,
 } from './UsuarioController.js';
 import { proteger, admin } from '../../middlewares/AutenticacionMiddleware.js';
+import { resolverTienda } from '../../middlewares/TenantMiddleware.js';
 
 const router = Router();
 
-router.use(proteger, admin);
+router.use(proteger, admin, resolverTienda);
 
 router.get('/', obtenerUsuarios);
 router.post('/', crearUsuario);

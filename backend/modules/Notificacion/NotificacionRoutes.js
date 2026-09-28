@@ -9,10 +9,11 @@ import {
   marcarVistasAdmin,
 } from './NotificacionController.js';
 import { proteger, admin } from '../../middlewares/AutenticacionMiddleware.js';
+import { resolverTienda } from '../../middlewares/TenantMiddleware.js';
 
 const router = Router();
 
-router.use(proteger);
+router.use(proteger, resolverTienda);
 
 router.get('/', obtenerNotificaciones);
 router.post('/', admin, crearNotificacion);
