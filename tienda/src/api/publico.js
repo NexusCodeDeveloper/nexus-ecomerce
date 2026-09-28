@@ -1,10 +1,4 @@
-import axios from 'axios';
-import { API_BASE_URL } from '../utils/apiBase';
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 30000,
-});
+import api from './cliente';
 
 export const obtenerTienda = (slug) => api.get(`/publico/${slug}`);
 

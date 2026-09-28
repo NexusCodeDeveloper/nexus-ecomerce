@@ -10,6 +10,7 @@ import Deposito from './pages/Deposito/Deposito'
 import Proveedores from './pages/Proveedores/Proveedores'
 import Devoluciones from './pages/Devoluciones/Devoluciones'
 import Ventas from './pages/Ventas/Ventas'
+import Pedidos from './pages/Pedidos/Pedidos'
 import Tickets from './pages/Tickets/Tickets'
 import Notificaciones from './pages/Notificaciones/Notificaciones'
 import Empleados from './pages/Empleados/Empleados'
@@ -73,6 +74,7 @@ function App() {
           <Route path="productos" element={<Productos />} />
           <Route path="deposito" element={<Deposito />} />
           <Route path="ventas" element={<Ventas />} />
+          <Route path="pedidos" element={<Pedidos />} />
           <Route path="tickets" element={<Tickets />} />
           <Route path="proveedores" element={<ProtectedRoute soloAdmin><Proveedores /></ProtectedRoute>} />
           <Route path="devoluciones" element={<Devoluciones />} />
