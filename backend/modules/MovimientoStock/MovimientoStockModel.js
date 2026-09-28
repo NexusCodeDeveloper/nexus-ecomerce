@@ -28,7 +28,17 @@ const stockMovementSchema = new mongoose.Schema(
     },
     tipo: {
       type: String,
-      enum: ['ingreso_deposito', 'ajuste_deposito', 'reposicion', 'retiro_deposito', 'ajuste_salon'],
+      enum: [
+        'ingreso_deposito',
+        'ajuste_deposito',
+        'reposicion',
+        'retiro_deposito',
+        'ajuste_salon',
+        'reposicion_catalogo',
+        'retiro_catalogo',
+        'ajuste_catalogo',
+        'ingreso_catalogo',
+      ],
       required: true,
     },
     cantidad: {

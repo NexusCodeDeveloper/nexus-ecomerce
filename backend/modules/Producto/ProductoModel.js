@@ -6,6 +6,7 @@ const variantSubSchema = new mongoose.Schema({
   color: { type: String, trim: true, default: '' },
   cantidad: { type: Number, required: true, min: 0, default: 0 },
   deposito: { type: Number, min: 0, default: 0 },
+  catalogo: { type: Number, min: 0, default: 0 },
 }, { _id: false });
 
 const productSchema = new mongoose.Schema(
@@ -30,6 +31,11 @@ const productSchema = new mongoose.Schema(
       default: 0,
     },
     deposito: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+    catalogo: {
       type: Number,
       min: 0,
       default: 0,
@@ -70,6 +76,7 @@ const productSchema = new mongoose.Schema(
 productSchema.pre('save', function (next) {
   if (this.variantes?.length > 0) {
     this.cantidad = this.variantes.reduce((sum, v) => sum + v.cantidad, 0);
+    this.catalogo = this.variantes.reduce((sum, v) => sum + (v.catalogo || 0), 0);
   }
   next();
 });
