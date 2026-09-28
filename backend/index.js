@@ -11,6 +11,7 @@ import { describirError } from './utils/MensajesErrorUtils.js';
 import { contextoPeticion, registradorPeticiones } from './middlewares/RequestLogger.js';
 import { manejadorErrores } from './middlewares/ErrorMiddleware.js';
 import AutenticacionRoutes from './modules/Autenticacion/AutenticacionRoutes.js';
+import TiendaRoutes from './modules/Tienda/TiendaRoutes.js';
 import ProveedorRoutes from './modules/Proveedor/ProveedorRoutes.js';
 import ProductoRoutes from './modules/Producto/ProductoRoutes.js';
 import MovimientoStockRoutes from './modules/MovimientoStock/MovimientoStockRoutes.js';
@@ -262,7 +263,9 @@ app.get('/api/health', (req, res) => {
 app.use('/api', globalLimiter);
 app.use('/api', soloEscrituras(writeLimiter));
 app.use('/api/auth/login', authLimiter);
+app.use('/api/tiendas/registro', authLimiter);
 app.use('/api/auth', AutenticacionRoutes);
+app.use('/api/tiendas', TiendaRoutes);
 app.use('/api/proveedores', ProveedorRoutes);
 app.use('/api/usuarios', UsuarioRoutes);
 app.use('/api/productos', ProductoRoutes);
