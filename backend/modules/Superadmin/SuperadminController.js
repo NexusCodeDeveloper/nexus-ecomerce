@@ -1,6 +1,7 @@
 import Tienda from '../Tienda/TiendaModel.js';
 import Pago from './PagoModel.js';
 import { limiteTiendas } from '../Tienda/TiendaController.js';
+import { schemaActualizarEstado, schemaRegistrarPago } from './SuperadminSchema.js';
 
 const escaparRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -56,6 +57,51 @@ export const obtenerTienda = async (req, res, next) => {
     }
     const pagos = await Pago.find({ tienda: tienda._id }).sort({ fechaCreacion: -1 }).limit(50);
     res.json({ tienda, pagos });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const cambiarEstado = async (req, res, next) => {
+  try {
+    const { estado } = schemaActualizarEstado.parse(req.body);
+    const tienda = await Tienda.findByIdAndUpdate(req.params.id, { $set: { estado } }, { new: true });
+    if (!tienda) {
+      return res.status(404).json({ message: 'Tienda no encontrada' });
+    }
+    res.json(tienda);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const registrarPago = async (req, res, next) => {
+  try {
+    const data = schemaRegistrarPago.parse(req.body);
+    const tienda = await Tienda.findById(req.params.id);
+    if (!tienda) {
+      return res.status(404).json({ message: 'Tienda no encontrada' });
+    }
+
+    const ahora = new Date();
+    const base = tienda.fechaVencimiento && tienda.fechaVencimiento > ahora ? tienda.fechaVencimiento : ahora;
+    const periodoHasta = new Date(base.getTime() + data.dias * 86400000);
+
+    const pago = await Pago.create({
+      tienda: tienda._id,
+      monto: data.monto,
+      metodo: data.metodo,
+      periodoDesde: base,
+      periodoHasta,
+      nota: data.nota,
+      registradoPor: req.usuario.id,
+    });
+
+    tienda.estado = 'activa';
+    tienda.fechaVencimiento = periodoHasta;
+    await tienda.save();
+
+    res.status(201).json({ pago, tienda });
   } catch (error) {
     next(error);
   }
