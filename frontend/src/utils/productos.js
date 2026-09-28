@@ -14,6 +14,9 @@ export const depositoTotal = (p) =>
 export const salonTotal = (p) =>
   p.variantes?.length > 0 ? p.variantes.reduce((s, v) => s + (Number(v.cantidad) || 0), 0) : (Number(p.cantidad) || 0);
 
+export const catalogoTotal = (p) =>
+  p.variantes?.length > 0 ? p.variantes.reduce((s, v) => s + (Number(v.catalogo) || 0), 0) : (Number(p.catalogo) || 0);
+
 export const variantLabel = (v) => [v.talle, v.color].filter(Boolean).join(' / ') || 'Base';
 
 export const variantShortLabel = (v) => {

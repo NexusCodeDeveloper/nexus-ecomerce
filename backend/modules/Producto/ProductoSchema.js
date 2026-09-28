@@ -7,6 +7,7 @@ const schemaVariante = z.object({
   color: z.string().optional().default(''),
   cantidad: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   deposito: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
+  catalogo: z.number().int().min(0, 'La cantidad no puede ser negativa').optional(),
 });
 
 const schemaCodigo = z.preprocess(
@@ -56,6 +57,7 @@ export const schemaCrearProducto = z.object({
   precio: z.number().finite().positive('El precio debe ser mayor a $0'),
   cantidad: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   deposito: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
+  catalogo: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   variantes: z.array(schemaVariante).optional().default([]),
   colores: z.array(z.string()).optional().default([]),
   categoria: z.string().min(1, 'La categoría es obligatoria'),
@@ -113,10 +115,18 @@ export const schemaDeposito = z.object({
   modo: z.enum(['sumar', 'fijar']).optional().default('sumar'),
 });
 
+export const schemaCatalogo = z.object({
+  cantidad: z.number().int().min(0, 'La cantidad no puede ser negativa'),
+  talle: z.string().optional().default(''),
+  color: z.string().optional().default(''),
+  modo: z.enum(['sumar', 'fijar']).optional().default('sumar'),
+});
+
 export const schemaActualizarProducto = z.object({
   nombre: z.string().min(1, 'El nombre del producto es obligatorio').optional(),
   precio: z.number().finite().positive('El precio debe ser mayor a $0').optional(),
   deposito: z.number().int().min(0, 'La cantidad no puede ser negativa').optional(),
+  catalogo: z.number().int().min(0, 'La cantidad no puede ser negativa').optional(),
   variantes: z.array(schemaVariante).optional(),
   colores: z.array(z.string()).optional(),
   categoria: z.string().min(1, 'La categoría es obligatoria').optional(),

@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { obtenerProductos, crearProducto, actualizarProducto, eliminarProducto, addDeposito, reponerStock, pasarSalon } from '../../api/productos';
+import { obtenerProductos, crearProducto, actualizarProducto, eliminarProducto, addDeposito, reponerStock, pasarSalon, pasarCatalogo } from '../../api/productos';
 import { obtenerMovimientosStock } from '../../api/movimientosStock';
 import { obtenerMensajeErrorApi } from '../../utils/apiError';
 import { printLabel } from '../../utils/printLabel';
 import { formatDate, formatMoney } from '../../utils/format';
-import { LIMITE_PRODUCTOS, depositoTotal, salonTotal, variantLabel, paramsProductos } from '../../utils/productos';
+import { LIMITE_PRODUCTOS, depositoTotal, salonTotal, catalogoTotal, variantLabel, paramsProductos } from '../../utils/productos';
 import { useApi } from '../../hooks/useApi';
 import { useCategorias } from '../../hooks/useCategorias';
 import { useDropdownAnclado } from '../../hooks/useDropdownAnclado';
@@ -381,6 +381,40 @@ const Deposito = () => {
     }
   };
 
+  const pasarTodoAlCatalogo = async (p) => {
+    cerrarDropdown();
+    if (pasarTodoSaving) return;
+    const variantes = (p.variantes || []).filter((v) => (v.deposito || 0) > 0);
+    const total = p.variantes?.length > 0
+      ? variantes.reduce((s, v) => s + (v.deposito || 0), 0)
+      : (p.deposito || 0);
+    if (total <= 0) {
+      toast({ message: 'No hay stock en depósito para pasar' });
+      return;
+    }
+    const confirmed = await confirm({
+      icon: 'warning',
+      title: '¿Pasar todo al catálogo?',
+      message: `Se pasarán ${total} unidad(es) de "${p.nombre}" del depósito al catálogo online.`,
+      confirmText: 'Pasar todo',
+    });
+    if (!confirmed) return;
+    setPasarTodoSaving(true);
+    try {
+      const items = p.variantes?.length > 0
+        ? variantes.map((v) => ({ producto: p._id, cantidad: v.deposito, talle: v.talle || '', color: v.color || '' }))
+        : [{ producto: p._id, cantidad: total, talle: '', color: '' }];
+      await pasarCatalogo(items);
+      recargarProductos();
+      toast({ message: `Pasado al catálogo: ${total} u.` });
+    } catch (err) {
+      alert({ icon: 'error', title: 'Error', message: obtenerMensajeErrorApi(err, 'No se pudo pasar el stock') });
+      recargarProductos();
+    } finally {
+      setPasarTodoSaving(false);
+    }
+  };
+
   const exportarMovimientosCsv = async () => {
     if (movimientos.length === 0) {
       toast({ message: 'No hay movimientos para exportar' });
@@ -468,6 +502,8 @@ const Deposito = () => {
             <span>Dep: {v.deposito || 0}</span>
             <span>·</span>
             <span>Salón: {v.cantidad || 0}</span>
+            <span>·</span>
+            <span>Catálogo: {v.catalogo || 0}</span>
           </div>
         ))}
       </div>
@@ -601,6 +637,7 @@ const Deposito = () => {
                       <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Código</th>
                       <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Depósito</th>
                       <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Salón</th>
+                      <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Catálogo</th>
                       <th className="text-right px-5 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Acciones</th>
                     </tr>
                   </thead>
@@ -640,6 +677,13 @@ const Deposito = () => {
                             {salonTotal(p)}
                           </span>
                         </td>
+                        <td className="px-4 py-3.5">
+                          <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${
+                            catalogoTotal(p) > 0 ? 'bg-ios-tint/15 text-ios-tint' : 'bg-ios-surface2 text-ios-tertiary'
+                          }`}>
+                            {catalogoTotal(p)}
+                          </span>
+                        </td>
                         <td className="px-5 py-3.5 text-right">{botonAcciones(p)}</td>
                       </tr>
                     ))}
@@ -673,6 +717,11 @@ const Deposito = () => {
                             salonTotal(p) > 0 ? 'bg-ios-green/15 text-ios-green' : 'bg-ios-red/15 text-ios-red'
                           }`}>
                             Salón {salonTotal(p)}
+                          </span>
+                          <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${
+                            catalogoTotal(p) > 0 ? 'bg-ios-tint/15 text-ios-tint' : 'bg-ios-surface2 text-ios-tertiary'
+                          }`}>
+                            Catálogo {catalogoTotal(p)}
                           </span>
                         </div>
                       </button>
@@ -817,6 +866,17 @@ const Deposito = () => {
               >
                 <IconArrowUp className="w-4 h-4" />
                 Pasar todo al salón
+              </button>
+            )}
+            {((dropdown.product?.variantes?.length > 0 && dropdown.product.variantes.some((v) => (v.deposito || 0) > 0))
+              || (dropdown.product?.variantes?.length === 0 && (dropdown.product?.deposito || 0) > 0)) && (
+              <button
+                onClick={() => pasarTodoAlCatalogo(dropdown.product)}
+                disabled={pasarTodoSaving}
+                className="flex items-center gap-2.5 w-full px-3.5 py-2.5 text-sm text-ios-tint hover:bg-ios-hover/5 rounded-xl transition-colors font-medium disabled:opacity-50"
+              >
+                <IconArrowUp className="w-4 h-4" />
+                Pasar todo al catálogo
               </button>
             )}
             {dropdown.product?.codigo && (

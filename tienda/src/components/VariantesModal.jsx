@@ -38,7 +38,7 @@ const VariantesModal = ({ producto, onCerrar, onAgregar }) => {
                   : 'border-slate-200 text-slate-600 hover:border-slate-300'
               }`}
             >
-              {etiquetaVariante(variante)} ({variante.cantidad})
+              {etiquetaVariante(variante)} ({variante.catalogo})
             </button>
           ))}
         </div>
@@ -56,7 +56,7 @@ const VariantesModal = ({ producto, onCerrar, onAgregar }) => {
             <span className="w-6 text-center font-semibold">{cantidad}</span>
             <button
               type="button"
-              onClick={() => setCantidad((actual) => Math.min(seleccion.cantidad, actual + 1))}
+              onClick={() => setCantidad((actual) => Math.min(seleccion.catalogo, actual + 1))}
               className="h-8 w-8 rounded-full border border-slate-200 text-slate-600"
             >
               +
