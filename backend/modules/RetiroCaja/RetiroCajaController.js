@@ -8,6 +8,7 @@ import { obtenerRango } from '../../utils/FechasUtils.js';
 import { enviarEvento } from '../../services/PushService.js';
 import { mensajeCierre, verificarOperacionNoEnCierre, MENSAJE_CIERRE_EN_CURSO } from '../../utils/CierresUtils.js';
 import { buscarCajaAbierta, cajaEsDeHoy, mensajeCajaAnterior } from '../../utils/CajaUtils.js';
+import { filtroTienda, idTienda, conTienda } from '../../utils/TenantUtils.js';
 import logger from '../../utils/LoggerUtils.js';
 
 const redondear = (valor) => Math.round((Number(valor) || 0) * 100) / 100;
@@ -22,20 +23,20 @@ const efectivoDeVenta = (venta) => {
   return metodo === 'efectivo' ? Number(venta.total) || 0 : 0;
 };
 
-const calcularRetiradoReal = async (desde, hasta, session = null) => {
-  const query = RetiroCaja.find({ fechaCreacion: { $gte: desde, $lt: hasta } }).select('monto');
+const calcularRetiradoReal = async (tienda, desde, hasta, session = null) => {
+  const query = RetiroCaja.find(conTienda(tienda, { fechaCreacion: { $gte: desde, $lt: hasta } })).select('monto');
   if (session) query.session(session);
   const retiros = await query;
   return redondear(retiros.reduce((sum, r) => sum + (Number(r.monto) || 0), 0));
 };
 
-const calcularEfectivoVendido = async (desde, hasta, session = null) => {
-  const query = Venta.find({ fechaCreacion: { $gte: desde, $lt: hasta }, estado: { $ne: 'devuelta' } }).select('pagos metodoPago total estado');
+const calcularEfectivoVendido = async (tienda, desde, hasta, session = null) => {
+  const query = Venta.find(conTienda(tienda, { fechaCreacion: { $gte: desde, $lt: hasta }, estado: { $ne: 'devuelta' } })).select('pagos metodoPago total estado');
   if (session) query.session(session);
   const sales = await query;
   const ventas = sales.reduce((sum, s) => sum + efectivoDeVenta(s), 0);
 
-  const queryDevoluciones = Devolucion.find({ fechaCreacion: { $gte: desde, $lt: hasta }, efectivoDevuelto: { $gt: 0 } }).select('efectivoDevuelto');
+  const queryDevoluciones = Devolucion.find(conTienda(tienda, { fechaCreacion: { $gte: desde, $lt: hasta }, efectivoDevuelto: { $gt: 0 } })).select('efectivoDevuelto');
   if (session) queryDevoluciones.session(session);
   const devoluciones = await queryDevoluciones;
   const reintegros = devoluciones.reduce((sum, r) => sum + (Number(r.efectivoDevuelto) || 0), 0);
@@ -50,7 +51,8 @@ const obtenerOffset = (req) => {
 
 export const obtenerDisponibleCaja = async (req, res, next) => {
   try {
-    const caja = await buscarCajaAbierta();
+    const tienda = idTienda(req);
+    const caja = await buscarCajaAbierta(null, tienda);
     if (!caja) {
       return res.json({ disponible: 0, cajaAbierta: false, esDeHoy: false });
     }
@@ -64,8 +66,8 @@ export const obtenerDisponibleCaja = async (req, res, next) => {
     }
     const hasta = new Date();
     const desde = caja.abiertaEn || caja.fecha;
-    const efectivoVendido = await calcularEfectivoVendido(desde, hasta);
-    const retirado = await calcularRetiradoReal(desde, hasta);
+    const efectivoVendido = await calcularEfectivoVendido(tienda, desde, hasta);
+    const retirado = await calcularRetiradoReal(tienda, desde, hasta);
     const disponible = Math.max(0, redondear((caja.fondoInicial || 0) + efectivoVendido - retirado));
     res.json({ disponible, cajaAbierta: true, esDeHoy: true });
   } catch (error) {
@@ -80,10 +82,11 @@ export const crearRetiroCaja = async (req, res, next) => {
     const data = schemaCrearRetiroCaja.parse(req.body);
     const realizadoPor = req.usuario.nombre;
     const montoRedondo = redondear(data.monto);
+    const tienda = idTienda(req);
 
     session.startTransaction();
 
-    const caja = await buscarCajaAbierta(session);
+    const caja = await buscarCajaAbierta(session, tienda);
     if (!caja) {
       await session.abortTransaction();
       return res.status(409).json({ message: 'Antes de retirar efectivo tenés que abrir la caja', code: 'SIN_CAJA' });
@@ -96,8 +99,8 @@ export const crearRetiroCaja = async (req, res, next) => {
     const desde = caja.abiertaEn || caja.fecha;
     const hasta = new Date();
     const fondo = caja.fondoInicial || 0;
-    const efectivoVendido = await calcularEfectivoVendido(desde, hasta, session);
-    const retiradoReal = await calcularRetiradoReal(desde, hasta, session);
+    const efectivoVendido = await calcularEfectivoVendido(tienda, desde, hasta, session);
+    const retiradoReal = await calcularRetiradoReal(tienda, desde, hasta, session);
     const disponible = Math.max(0, redondear(fondo + efectivoVendido - retiradoReal));
     if (montoRedondo > disponible) {
       await session.abortTransaction();
@@ -108,7 +111,7 @@ export const crearRetiroCaja = async (req, res, next) => {
 
     await RetiroCajaDia.updateOne(
       { caja: caja._id },
-      { $setOnInsert: { caja: caja._id, retirado: retiradoReal } },
+      { $setOnInsert: { caja: caja._id, tienda, retirado: retiradoReal } },
       { upsert: true, session }
     );
 
@@ -126,7 +129,7 @@ export const crearRetiroCaja = async (req, res, next) => {
       });
     }
 
-    const creado = await RetiroCaja.create([{ ...data, monto: montoRedondo, realizadoPor, caja: caja._id }], { session });
+    const creado = await RetiroCaja.create([{ ...data, monto: montoRedondo, realizadoPor, caja: caja._id, tienda }], { session });
     const withdrawal = creado[0];
 
     await session.commitTransaction();
@@ -136,6 +139,7 @@ export const crearRetiroCaja = async (req, res, next) => {
       titulo: 'Retiro de efectivo',
       mensaje: `$${montoRedondo.toLocaleString('es-AR', { minimumFractionDigits: 2 })} · ${data.motivo} · ${realizadoPor}`,
       url: '/sales',
+      tienda,
       para: { usuarioId: req.usuario.id, nombre: realizadoPor },
     });
 
@@ -151,7 +155,7 @@ export const crearRetiroCaja = async (req, res, next) => {
 export const obtenerRetirosCaja = async (req, res, next) => {
   try {
     const { desde, hasta, offset = 0 } = req.query;
-    const filter = {};
+    const filter = filtroTienda(req);
 
     if (desde || hasta) {
       filter.fechaCreacion = obtenerRango(desde, hasta, offset);
@@ -171,13 +175,14 @@ export const eliminarRetiroCaja = async (req, res, next) => {
   try {
     session = await mongoose.startSession();
     session.startTransaction();
-    const withdrawal = await RetiroCaja.findById(req.params.id).session(session);
+    const tienda = idTienda(req);
+    const withdrawal = await RetiroCaja.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
     if (!withdrawal) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Retiro no encontrado' });
     }
 
-    const verificacion = await verificarOperacionNoEnCierre(withdrawal.fechaCreacion, session);
+    const verificacion = await verificarOperacionNoEnCierre(withdrawal.fechaCreacion, session, tienda);
     if (verificacion.bloqueado) {
       await session.abortTransaction();
       return res.status(409).json({
@@ -191,7 +196,7 @@ export const eliminarRetiroCaja = async (req, res, next) => {
     let cajaId = withdrawal.caja;
     let desdeCaja = null;
     if (!cajaId) {
-      const abierta = await buscarCajaAbierta(session);
+      const abierta = await buscarCajaAbierta(session, tienda);
       if (abierta && new Date(withdrawal.fechaCreacion) >= new Date(abierta.abiertaEn || abierta.fecha)) {
         cajaId = abierta._id;
         desdeCaja = abierta.abiertaEn || abierta.fecha;

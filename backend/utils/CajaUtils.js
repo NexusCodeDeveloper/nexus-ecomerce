@@ -3,8 +3,10 @@ import { inicioDeDia } from './FechasUtils.js';
 
 export const MENSAJE_SIN_CAJA = 'Antes de operar tenés que abrir la caja';
 
-export const buscarCajaAbierta = async (session = null) => {
-  const query = CierreCaja.findOne({ estado: 'abierto' });
+export const buscarCajaAbierta = async (session = null, tienda = null) => {
+  const filtro = { estado: 'abierto' };
+  if (tienda) filtro.tienda = tienda;
+  const query = CierreCaja.findOne(filtro);
   if (session) query.session(session);
   return query;
 };
