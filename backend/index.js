@@ -28,6 +28,7 @@ import Venta from './modules/Venta/VentaModel.js';
 import CierreCaja from './modules/Venta/CierreCajaModel.js';
 import { asegurarNumerosTicket, migrarArticulosVenta } from './modules/Venta/VentaController.js';
 import { limpiarSuscripcionesHuerfanas } from './services/PushService.js';
+import { pausarVencidas } from './services/VencimientosService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -355,6 +356,18 @@ if (!process.env.VERCEL) {
         }
         process.exit(1);
       });
+
+      const pausar = () => {
+        pausarVencidas().catch((error) => {
+          logger.warn('No se pudieron pausar las tiendas vencidas', {
+            motivo: error.message,
+            queRevisar: 'Revisá la conexión a la base de datos.',
+            origen: 'backend',
+          });
+        });
+      };
+      pausar();
+      setInterval(pausar, 6 * 60 * 60 * 1000).unref();
     })
     .catch((error) => {
       const d = describirError(error);

@@ -96,9 +96,9 @@ const tiendaSchema = new mongoose.Schema(
 );
 
 tiendaSchema.methods.estaVigente = function estaVigente() {
-  if (this.estado === 'activa') return true;
-  if (this.estado !== 'trial') return false;
-  return !this.fechaVencimiento || this.fechaVencimiento > new Date();
+  if (this.estado === 'pausada') return false;
+  if (!this.fechaVencimiento) return true;
+  return this.fechaVencimiento > new Date();
 };
 
 export default mongoose.model('Tienda', tiendaSchema, 'tiendas');

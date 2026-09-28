@@ -4,6 +4,7 @@ import Usuario from '../Autenticacion/UsuarioModel.js';
 import { registroTiendaSchema, disponibilidadSlugSchema } from './TiendaSchema.js';
 import { generarToken } from '../../utils/JwtUtils.js';
 import { verificarCaptcha } from '../../services/CaptchaService.js';
+import { pausarVencidas } from '../../services/VencimientosService.js';
 import logger from '../../utils/LoggerUtils.js';
 
 const MS_POR_DIA = 86400000;
@@ -15,6 +16,15 @@ export const consultarSlug = async (req, res, next) => {
     const { slug } = disponibilidadSlugSchema.parse(req.params);
     const existe = await Tienda.exists({ slug });
     res.json({ slug, disponible: !existe });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const ejecutarPausaVencidas = async (req, res, next) => {
+  try {
+    const pausadas = await pausarVencidas();
+    res.json({ pausadas });
   } catch (error) {
     next(error);
   }

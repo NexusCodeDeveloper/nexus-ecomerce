@@ -46,7 +46,7 @@ export const clearDB = async () => {
 
 export const runHandler = async (
   handler,
-  { body = {}, params = {}, query = {}, usuario = { id: '507f1f77bcf86cd799439011', nombre: 'Admin', rol: 'admin' } } = {}
+  { body = {}, params = {}, query = {}, usuario = { id: '507f1f77bcf86cd799439011', nombre: 'Admin', rol: 'admin' }, headers = {} } = {}
 ) => {
   let statusCode = 200;
   let payload;
@@ -60,7 +60,7 @@ export const runHandler = async (
       return this;
     },
   };
-  const req = { body, params, query, usuario };
+  const req = { body, params, query, usuario, headers };
   await handler(req, res, (err) => {
     throw err;
   });
