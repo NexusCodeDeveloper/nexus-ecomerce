@@ -307,7 +307,10 @@ export const actualizarProducto = async (req, res, next) => {
         data.variantes = data.variantes.map((v) => {
           const idx = indiceDeVariante(product, v.talle, v.color);
           const depositoNuevo = Number(v.deposito) || 0;
-          const catalogoNuevo = Number(v.catalogo) || 0;
+          const prev = idx === -1 ? null : product.variantes[idx];
+          const catalogoNuevo = v.catalogo === undefined
+            ? (prev?.catalogo || 0)
+            : (Number(v.catalogo) || 0);
           if (idx === -1) {
             if (depositoNuevo > 0) {
               movimientos.push({ talle: v.talle || '', color: v.color || '', tipo: 'ingreso_deposito', cantidad: depositoNuevo });
@@ -317,7 +320,6 @@ export const actualizarProducto = async (req, res, next) => {
             }
             return { ...v, cantidad: 0, deposito: depositoNuevo, catalogo: catalogoNuevo };
           }
-          const prev = product.variantes[idx];
           const deltaDeposito = depositoNuevo - (prev.deposito || 0);
           if (deltaDeposito !== 0) {
             movimientos.push({ talle: v.talle || '', color: v.color || '', tipo: 'ajuste_deposito', cantidad: Math.abs(deltaDeposito) });

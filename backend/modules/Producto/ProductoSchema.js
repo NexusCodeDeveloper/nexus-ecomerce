@@ -7,7 +7,7 @@ const schemaVariante = z.object({
   color: z.string().optional().default(''),
   cantidad: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   deposito: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
-  catalogo: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
+  catalogo: z.number().int().min(0, 'La cantidad no puede ser negativa').optional(),
 });
 
 const schemaCodigo = z.preprocess(
