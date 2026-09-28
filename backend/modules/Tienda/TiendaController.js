@@ -1,10 +1,11 @@
 import mongoose from 'mongoose';
 import Tienda, { DIAS_TRIAL } from './TiendaModel.js';
 import Usuario from '../Autenticacion/UsuarioModel.js';
-import { registroTiendaSchema, disponibilidadSlugSchema } from './TiendaSchema.js';
+import { registroTiendaSchema, disponibilidadSlugSchema, actualizarTiendaSchema } from './TiendaSchema.js';
 import { generarToken } from '../../utils/JwtUtils.js';
 import { verificarCaptcha } from '../../services/CaptchaService.js';
 import { pausarVencidas } from '../../services/VencimientosService.js';
+import { generarFirmaSubida } from '../../services/CloudinaryService.js';
 import logger from '../../utils/LoggerUtils.js';
 
 const MS_POR_DIA = 86400000;
@@ -28,6 +29,52 @@ export const ejecutarPausaVencidas = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+export const obtenerMiTienda = (req, res) => {
+  res.json(req.tienda);
+};
+
+export const actualizarMiTienda = async (req, res, next) => {
+  try {
+    const data = actualizarTiendaSchema.parse(req.body);
+    const tienda = req.tienda;
+
+    if (data.nombre !== undefined) tienda.nombre = data.nombre;
+    if (data.whatsapp !== undefined) tienda.whatsapp = data.whatsapp;
+    if (data.telefono !== undefined) tienda.telefono = data.telefono;
+    if (data.modoVenta !== undefined) tienda.modoVenta = data.modoVenta;
+
+    if (data.pago) {
+      const actual = tienda.pago?.toObject?.() ?? tienda.pago ?? {};
+      tienda.pago = { ...actual, ...data.pago };
+    }
+
+    if (data.tema) {
+      const actual = tienda.tema?.toObject?.() ?? tienda.tema ?? {};
+      tienda.tema = {
+        ...actual,
+        ...data.tema,
+        redes: { ...(actual.redes || {}), ...(data.tema.redes || {}) },
+      };
+    }
+
+    await tienda.save();
+    res.json(tienda);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const firmarSubidaCloudinary = (req, res) => {
+  const firma = generarFirmaSubida(req.tienda.slug);
+  if (!firma) {
+    return res.status(503).json({
+      message: 'La subida de imágenes no está configurada en el servidor',
+      codigo: 'CLOUDINARY_NO_CONFIGURADO',
+    });
+  }
+  res.json(firma);
 };
 
 export const registrarTienda = async (req, res, next) => {

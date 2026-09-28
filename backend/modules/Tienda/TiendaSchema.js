@@ -19,6 +19,11 @@ export const crearTiendaSchema = z.object({
   modoVenta: z.enum(['local', 'catalogo', 'ambos']).default('ambos'),
 });
 
+const colorHex = z
+  .string()
+  .trim()
+  .regex(/^#[0-9a-fA-F]{6}$/, 'El color debe tener el formato #RRGGBB');
+
 export const actualizarTiendaSchema = z.object({
   nombre: z.string().trim().min(2, 'El nombre del comercio es requerido').optional(),
   whatsapp: z.string().trim().min(6, 'El WhatsApp es requerido').optional(),
@@ -30,6 +35,23 @@ export const actualizarTiendaSchema = z.object({
       cbu: z.string().trim().max(30).optional(),
       titular: z.string().trim().max(80).optional(),
       banco: z.string().trim().max(80).optional(),
+    })
+    .optional(),
+  tema: z
+    .object({
+      plantilla: z.string().trim().max(40).optional(),
+      colorPrimario: colorHex.optional(),
+      colorSecundario: colorHex.optional(),
+      tipografia: z.string().trim().max(60).optional(),
+      logo: z.string().trim().max(500).optional(),
+      banner: z.string().trim().max(500).optional(),
+      redes: z
+        .object({
+          instagram: z.string().trim().max(200).optional(),
+          facebook: z.string().trim().max(200).optional(),
+          tiktok: z.string().trim().max(200).optional(),
+        })
+        .optional(),
     })
     .optional(),
 });
