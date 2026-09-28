@@ -12,7 +12,10 @@ export const agregarStock = (id, data) => api.put(`/productos/${id}/agregar-stoc
 export const addDeposito = (id, data) => api.put(`/productos/${id}/deposito`, data);
 export const reponerStock = (id, data) => api.post(`/productos/${id}/reponer`, data);
 export const pasarSalon = (articulos) => api.post('/productos/pasar-salon', { articulos });
+export const pasarCatalogo = (articulos) => api.post('/productos/pasar-catalogo', { articulos });
 export const retirarStock = (id, data) => api.post(`/productos/${id}/retirar`, data);
+export const retirarCatalogo = (id, data) => api.post(`/productos/${id}/retirar-catalogo`, data);
+export const addCatalogo = (id, data) => api.put(`/productos/${id}/catalogo`, data);
 export const intercambiarProducto = (data) => api.post('/productos/intercambio', data);
 export const obtenerStockBajo = () => api.get('/productos/stock-bajo');
 
