@@ -1,7 +1,9 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAutenticacion } from './context/autenticacionContexto'
 import ProtectedRoute from './components/ProtectedRoute/ProtectedRoute'
+import SuperadminRoute from './components/SuperadminRoute/SuperadminRoute'
 import Layout from './components/Layout/Layout'
+import SuperadminLayout from './components/Layout/SuperadminLayout'
 import LoginModal from './pages/Login/Login'
 import Productos from './pages/Productos/Productos'
 import Deposito from './pages/Deposito/Deposito'
@@ -11,12 +13,16 @@ import Ventas from './pages/Ventas/Ventas'
 import Tickets from './pages/Tickets/Tickets'
 import Notificaciones from './pages/Notificaciones/Notificaciones'
 import Empleados from './pages/Empleados/Empleados'
+import ResumenPlataforma from './pages/Superadmin/Resumen'
+import TiendasPlataforma from './pages/Superadmin/Tiendas'
+import TiendaDetalle from './pages/Superadmin/TiendaDetalle'
 import LoadingSpinner from './components/common/LoadingSpinner'
 import WelcomeOverlay from './components/Layout/WelcomeOverlay'
 import BannerPermisoPush from './components/BannerPermisoPush'
 
 function Inicio() {
-  return <Navigate to="/productos" replace />
+  const { esSuperadmin } = useAutenticacion()
+  return <Navigate to={esSuperadmin ? '/superadmin' : '/productos'} replace />
 }
 
 function App() {
@@ -42,7 +48,7 @@ function App() {
     )
   }
 
-  const { usuario, loading } = autenticacion
+  const { usuario, loading, esSuperadmin } = autenticacion
 
   if (loading) {
     return (
@@ -58,7 +64,7 @@ function App() {
         <Route
           path="/"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute soloTienda>
               <Layout key={usuario ? 'auth' : 'guest'} />
             </ProtectedRoute>
           }
@@ -73,11 +79,23 @@ function App() {
           <Route path="notificaciones" element={<Notificaciones />} />
           <Route path="empleados" element={<ProtectedRoute soloAdmin><Empleados /></ProtectedRoute>} />
         </Route>
+        <Route
+          path="/superadmin"
+          element={
+            <SuperadminRoute>
+              <SuperadminLayout />
+            </SuperadminRoute>
+          }
+        >
+          <Route index element={<ResumenPlataforma />} />
+          <Route path="tiendas" element={<TiendasPlataforma />} />
+          <Route path="tiendas/:id" element={<TiendaDetalle />} />
+        </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       {!usuario && <LoginModal />}
-      {usuario && <WelcomeOverlay />}
-      {usuario && <BannerPermisoPush />}
+      {usuario && !esSuperadmin && <WelcomeOverlay />}
+      {usuario && !esSuperadmin && <BannerPermisoPush />}
     </>
   )
 }
