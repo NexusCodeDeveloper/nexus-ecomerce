@@ -22,7 +22,7 @@ export const resolverTienda = async (req, res, next) => {
         codigo: 'TIENDA_NO_ENCONTRADA',
       });
     }
-    if (tienda.estado === 'pausada') {
+    if (!tienda.estaVigente()) {
       return responderTiendaPausada(res);
     }
 
