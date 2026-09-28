@@ -1,6 +1,7 @@
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import Producto from '../../modules/Producto/ProductoModel.js';
+import Tienda from '../../modules/Tienda/TiendaModel.js';
 import Venta from '../../modules/Venta/VentaModel.js';
 import Devolucion from '../../modules/Devolucion/DevolucionModel.js';
 import MovimientoStock from '../../modules/MovimientoStock/MovimientoStockModel.js';
@@ -15,6 +16,7 @@ export const startTestDB = async () => {
   replSet = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
   await mongoose.connect(replSet.getUri(), { serverSelectionTimeoutMS: 30000 });
   await Promise.all([
+    Tienda.init(),
     Producto.init(),
     Venta.init(),
     Devolucion.init(),
