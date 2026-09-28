@@ -1,22 +1,7 @@
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import Usuario from './UsuarioModel.js';
 import { iniciarSesionSchema } from './AutenticacionSchema.js';
-
-const generarToken = (usuario) => {
-  return jwt.sign(
-    {
-      id: usuario._id,
-      nombre: usuario.nombre,
-      email: usuario.email,
-      rol: usuario.rol,
-      tienda: usuario.tienda ? String(usuario.tienda) : null,
-      versionToken: usuario.versionToken || 0,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '8h' }
-  );
-};
+import { generarToken } from '../../utils/JwtUtils.js';
 
 export const iniciarSesion = async (req, res, next) => {
   try {
