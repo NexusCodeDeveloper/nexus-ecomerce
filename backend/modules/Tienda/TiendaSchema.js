@@ -24,6 +24,14 @@ export const actualizarTiendaSchema = z.object({
   whatsapp: z.string().trim().min(6, 'El WhatsApp es requerido').optional(),
   telefono: z.string().trim().optional(),
   modoVenta: z.enum(['local', 'catalogo', 'ambos']).optional(),
+  pago: z
+    .object({
+      alias: z.string().trim().max(50).optional(),
+      cbu: z.string().trim().max(30).optional(),
+      titular: z.string().trim().max(80).optional(),
+      banco: z.string().trim().max(80).optional(),
+    })
+    .optional(),
 });
 
 export const registroTiendaSchema = z.object({

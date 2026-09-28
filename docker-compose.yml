@@ -12,7 +12,7 @@ services:
       - ./backend/.env
     environment:
       - NODE_ENV=development
-      - ALLOWED_ORIGINS=http://localhost:5173
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
       - CHOKIDAR_USEPOLLING=true # Hot reload confiable en Docker + Windows
 
   frontend:
@@ -23,6 +23,18 @@ services:
       - "5173:5173"
     volumes:
       - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+
+  tienda:
+    build:
+      context: ./tienda
+      dockerfile: Dockerfile
+    ports:
+      - "5174:5174"
+    volumes:
+      - ./tienda:/app
       - /app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true

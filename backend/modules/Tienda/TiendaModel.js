@@ -22,6 +22,16 @@ const temaSubSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const pagoSubSchema = new mongoose.Schema(
+  {
+    alias: { type: String, trim: true, default: '' },
+    cbu: { type: String, trim: true, default: '' },
+    titular: { type: String, trim: true, default: '' },
+    banco: { type: String, trim: true, default: '' },
+  },
+  { _id: false }
+);
+
 const tiendaSchema = new mongoose.Schema(
   {
     nombre: {
@@ -89,6 +99,10 @@ const tiendaSchema = new mongoose.Schema(
     },
     tema: {
       type: temaSubSchema,
+      default: () => ({}),
+    },
+    pago: {
+      type: pagoSubSchema,
       default: () => ({}),
     },
   },
