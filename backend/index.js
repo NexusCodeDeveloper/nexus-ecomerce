@@ -12,6 +12,7 @@ import { contextoPeticion, registradorPeticiones } from './middlewares/RequestLo
 import { manejadorErrores } from './middlewares/ErrorMiddleware.js';
 import AutenticacionRoutes from './modules/Autenticacion/AutenticacionRoutes.js';
 import TiendaRoutes from './modules/Tienda/TiendaRoutes.js';
+import SuperadminRoutes from './modules/Superadmin/SuperadminRoutes.js';
 import ProveedorRoutes from './modules/Proveedor/ProveedorRoutes.js';
 import ProductoRoutes from './modules/Producto/ProductoRoutes.js';
 import MovimientoStockRoutes from './modules/MovimientoStock/MovimientoStockRoutes.js';
@@ -151,6 +152,22 @@ const sembrarUsuarios = async (tienda) => {
   }
 };
 
+const sembrarSuperadmin = async () => {
+  const email = String(process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase();
+  const clave = process.env.SUPERADMIN_PASSWORD;
+  if (!email || !clave) return;
+
+  const existente = await Usuario.findOne({ email });
+  if (existente) return;
+
+  try {
+    await Usuario.create({ nombre: 'Superadmin', email, clave, rol: 'superadmin' });
+    logger.info('Usuario superadmin creado', { email });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+  }
+};
+
 let inicializarPromesa = null;
 
 const inicializar = () => {
@@ -159,6 +176,7 @@ const inicializar = () => {
       await connectDB();
       const tienda = await sembrarTiendaPorDefecto();
       await sembrarUsuarios(tienda);
+      await sembrarSuperadmin();
       try {
         await Venta.init();
         await CierreCaja.init();
@@ -267,6 +285,7 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/tiendas/registro', authLimiter);
 app.use('/api/auth', AutenticacionRoutes);
 app.use('/api/tiendas', TiendaRoutes);
+app.use('/api/superadmin', SuperadminRoutes);
 app.use('/api/proveedores', ProveedorRoutes);
 app.use('/api/usuarios', UsuarioRoutes);
 app.use('/api/productos', ProductoRoutes);
