@@ -152,6 +152,22 @@ const sembrarUsuarios = async (tienda) => {
   }
 };
 
+const sembrarSuperadmin = async () => {
+  const email = String(process.env.SUPERADMIN_EMAIL || '').trim().toLowerCase();
+  const clave = process.env.SUPERADMIN_PASSWORD;
+  if (!email || !clave) return;
+
+  const existente = await Usuario.findOne({ email });
+  if (existente) return;
+
+  try {
+    await Usuario.create({ nombre: 'Superadmin', email, clave, rol: 'superadmin' });
+    logger.info('Usuario superadmin creado', { email });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+  }
+};
+
 let inicializarPromesa = null;
 
 const inicializar = () => {
@@ -160,6 +176,7 @@ const inicializar = () => {
       await connectDB();
       const tienda = await sembrarTiendaPorDefecto();
       await sembrarUsuarios(tienda);
+      await sembrarSuperadmin();
       try {
         await Venta.init();
         await CierreCaja.init();
