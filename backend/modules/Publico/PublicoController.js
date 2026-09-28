@@ -28,8 +28,8 @@ const disponibleDe = (producto, talle, color) => {
 };
 
 export const obtenerTiendaPublica = (req, res) => {
-  const { nombre, slug, whatsapp, telefono, email, modoVenta, tema } = req.tienda;
-  res.json({ nombre, slug, whatsapp, telefono, email, modoVenta, tema });
+  const { nombre, slug, whatsapp, telefono, email, modoVenta, tema, pago } = req.tienda;
+  res.json({ nombre, slug, whatsapp, telefono, email, modoVenta, tema, pago });
 };
 
 export const obtenerProductosPublicos = async (req, res, next) => {
