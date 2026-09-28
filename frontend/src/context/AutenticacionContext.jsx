@@ -110,10 +110,11 @@ export const AutenticacionProvider = ({ children }) => {
   }, [clearSession]);
 
   const esAdmin = usuario?.rol === 'admin';
+  const esSuperadmin = usuario?.rol === 'superadmin';
 
   const value = useMemo(
-    () => ({ usuario, loading, login, logout, esAdmin }),
-    [usuario, loading, login, logout, esAdmin]
+    () => ({ usuario, loading, login, logout, esAdmin, esSuperadmin }),
+    [usuario, loading, login, logout, esAdmin, esSuperadmin]
   );
 
   return (
