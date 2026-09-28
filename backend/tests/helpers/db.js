@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import Producto from '../../modules/Producto/ProductoModel.js';
 import Tienda from '../../modules/Tienda/TiendaModel.js';
 import Pago from '../../modules/Superadmin/PagoModel.js';
+import Pedido from '../../modules/Pedido/PedidoModel.js';
 import Venta from '../../modules/Venta/VentaModel.js';
 import Devolucion from '../../modules/Devolucion/DevolucionModel.js';
 import MovimientoStock from '../../modules/MovimientoStock/MovimientoStockModel.js';
@@ -19,6 +20,7 @@ export const startTestDB = async () => {
   await Promise.all([
     Tienda.init(),
     Pago.init(),
+    Pedido.init(),
     Producto.init(),
     Venta.init(),
     Devolucion.init(),
@@ -48,7 +50,7 @@ export const clearDB = async () => {
 
 export const runHandler = async (
   handler,
-  { body = {}, params = {}, query = {}, usuario = { id: '507f1f77bcf86cd799439011', nombre: 'Admin', rol: 'admin' }, headers = {} } = {}
+  { body = {}, params = {}, query = {}, usuario = { id: '507f1f77bcf86cd799439011', nombre: 'Admin', rol: 'admin' }, headers = {}, tienda = null } = {}
 ) => {
   let statusCode = 200;
   let payload;
@@ -62,7 +64,7 @@ export const runHandler = async (
       return this;
     },
   };
-  const req = { body, params, query, usuario, headers };
+  const req = { body, params, query, usuario, headers, tienda };
   await handler(req, res, (err) => {
     throw err;
   });

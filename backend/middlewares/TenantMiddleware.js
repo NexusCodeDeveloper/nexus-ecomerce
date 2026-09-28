@@ -65,3 +65,13 @@ export const requiereSuperadmin = (req, res, next) => {
     res.status(403).json({ message: 'Acceso denegado, se requiere rol de superadministrador' });
   }
 };
+
+export const requiereCatalogo = (req, res, next) => {
+  if (req.tienda?.modoVenta === 'local') {
+    return res.status(404).json({
+      message: 'Esta tienda no tiene catálogo online',
+      codigo: 'SIN_CATALOGO',
+    });
+  }
+  next();
+};
