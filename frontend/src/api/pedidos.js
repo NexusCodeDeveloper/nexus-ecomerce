@@ -1,6 +1,5 @@
 import api from './axios';
 
-export const obtenerPedidos = (params = {}) => api.get('/pedidos', { params });
-
+export const obtenerPedidos = (params = {}) => api.get('/superadmin/pedidos', { params });
 export const cambiarEstadoPedido = (id, estado) =>
-  api.patch(`/pedidos/${id}/estado`, { estado });
+  api.patch(`/superadmin/pedidos/${id}/estado`, { estado });

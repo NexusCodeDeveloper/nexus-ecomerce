@@ -10,13 +10,14 @@ import Deposito from './pages/Deposito/Deposito'
 import Proveedores from './pages/Proveedores/Proveedores'
 import Devoluciones from './pages/Devoluciones/Devoluciones'
 import Ventas from './pages/Ventas/Ventas'
-import Pedidos from './pages/Pedidos/Pedidos'
 import Tickets from './pages/Tickets/Tickets'
 import Notificaciones from './pages/Notificaciones/Notificaciones'
 import Empleados from './pages/Empleados/Empleados'
 import ResumenPlataforma from './pages/Superadmin/Resumen'
 import TiendasPlataforma from './pages/Superadmin/Tiendas'
 import TiendaDetalle from './pages/Superadmin/TiendaDetalle'
+import PedidosSuperadmin from './pages/Superadmin/Pedidos'
+import Pedidos from './pages/Pedidos/Pedidos'
 import LoadingSpinner from './components/common/LoadingSpinner'
 import WelcomeOverlay from './components/Layout/WelcomeOverlay'
 import BannerPermisoPush from './components/BannerPermisoPush'
@@ -92,6 +93,7 @@ function App() {
           <Route index element={<ResumenPlataforma />} />
           <Route path="tiendas" element={<TiendasPlataforma />} />
           <Route path="tiendas/:id" element={<TiendaDetalle />} />
+          <Route path="pedidos" element={<PedidosSuperadmin />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -45,6 +45,14 @@ export const proteger = async (req, res, next) => {
   }
 };
 
+export const superadmin = (req, res, next) => {
+  if (req.usuario && req.usuario.rol === 'superadmin') {
+    next();
+  } else {
+    res.status(403).json({ message: 'Acceso denegado, se requiere rol de superadministrador' });
+  }
+};
+
 export const admin = (req, res, next) => {
   if (req.usuario && ['admin', 'superadmin'].includes(req.usuario.rol)) {
     next();
