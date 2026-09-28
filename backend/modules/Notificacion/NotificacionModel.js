@@ -2,6 +2,10 @@ import mongoose from 'mongoose';
 
 const notificationSchema = new mongoose.Schema(
   {
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+    },
     titulo: {
       type: String,
       required: true,
@@ -63,8 +67,8 @@ const notificationSchema = new mongoose.Schema(
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' } }
 );
 
-notificationSchema.index({ fechaCreacion: -1 });
-notificationSchema.index({ estado: 1, fechaCreacion: -1 });
-notificationSchema.index({ destinatario: 1, fechaCreacion: -1 });
+notificationSchema.index({ tienda: 1, fechaCreacion: -1 });
+notificationSchema.index({ tienda: 1, estado: 1, fechaCreacion: -1 });
+notificationSchema.index({ tienda: 1, destinatario: 1, fechaCreacion: -1 });
 
 export default mongoose.model('Notificacion', notificationSchema, 'notificaciones');

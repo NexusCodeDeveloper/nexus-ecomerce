@@ -3,6 +3,10 @@ import { campoCentavos, campoCentavosPositivo } from '../../utils/DineroUtils.js
 
 const returnSchema = new mongoose.Schema(
   {
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+    },
     producto: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Producto',
@@ -90,9 +94,9 @@ const returnSchema = new mongoose.Schema(
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' }, toJSON: { getters: true } }
 );
 
-returnSchema.index({ producto: 1, fechaCreacion: -1 });
-returnSchema.index({ productoCargar: 1 });
-returnSchema.index({ venta: 1 });
-returnSchema.index({ fechaCreacion: -1 });
+returnSchema.index({ tienda: 1, producto: 1, fechaCreacion: -1 });
+returnSchema.index({ tienda: 1, productoCargar: 1 });
+returnSchema.index({ tienda: 1, venta: 1 });
+returnSchema.index({ tienda: 1, fechaCreacion: -1 });
 
 export default mongoose.model('Devolucion', returnSchema, 'devoluciones');

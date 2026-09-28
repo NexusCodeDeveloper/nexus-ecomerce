@@ -10,6 +10,10 @@ const variantSubSchema = new mongoose.Schema({
 
 const productSchema = new mongoose.Schema(
   {
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+    },
     nombre: {
       type: String,
       required: true,
@@ -71,7 +75,7 @@ productSchema.pre('save', function (next) {
 });
 
 productSchema.index({ nombre: 'text' });
-productSchema.index({ categoria: 1 });
-productSchema.index({ codigo: 1 }, { unique: true, sparse: true });
+productSchema.index({ tienda: 1, categoria: 1 });
+productSchema.index({ tienda: 1, codigo: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model('Producto', productSchema, 'productos');

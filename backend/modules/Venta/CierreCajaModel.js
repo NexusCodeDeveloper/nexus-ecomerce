@@ -2,6 +2,10 @@ import mongoose from 'mongoose';
 import { campoCentavosPositivo } from '../../utils/DineroUtils.js';
 
 const dailyCloseSchema = new mongoose.Schema({
+  tienda: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tienda',
+  },
   fecha: {
     type: Date,
     required: true,
@@ -50,6 +54,6 @@ const dailyCloseSchema = new mongoose.Schema({
   }],
 }, { toJSON: { getters: true } });
 
-dailyCloseSchema.index({ fecha: 1, turno: 1 }, { unique: true });
+dailyCloseSchema.index({ tienda: 1, fecha: 1, turno: 1 }, { unique: true });
 
 export default mongoose.model('CierreCaja', dailyCloseSchema, 'cierresCaja');

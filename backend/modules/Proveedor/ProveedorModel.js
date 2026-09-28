@@ -2,10 +2,13 @@ import mongoose from 'mongoose';
 
 const supplierSchema = new mongoose.Schema(
   {
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+    },
     nombre: {
       type: String,
       required: true,
-      unique: true,
       trim: true,
     },
     telefono: {
@@ -27,5 +30,7 @@ const supplierSchema = new mongoose.Schema(
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' } }
 );
+
+supplierSchema.index({ tienda: 1, nombre: 1 }, { unique: true });
 
 export default mongoose.model('Proveedor', supplierSchema, 'proveedores');

@@ -3,6 +3,10 @@ import { campoCentavos } from '../../utils/DineroUtils.js';
 
 const cashWithdrawalSchema = new mongoose.Schema(
   {
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+    },
     caja: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'CierreCaja',
@@ -27,6 +31,6 @@ const cashWithdrawalSchema = new mongoose.Schema(
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' }, toJSON: { getters: true } }
 );
 
-cashWithdrawalSchema.index({ fechaCreacion: -1 });
+cashWithdrawalSchema.index({ tienda: 1, fechaCreacion: -1 });
 
 export default mongoose.model('RetiroCaja', cashWithdrawalSchema, 'retirosCaja');
