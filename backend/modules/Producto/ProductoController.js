@@ -11,6 +11,7 @@ import { indiceDeVariante, depositoDe } from '../../utils/VariantesUtils.js';
 import { ejecutarCambio } from '../Devolucion/DevolucionService.js';
 import { responderErrorDeServicio } from '../../utils/RespuestaErrorUtils.js';
 import { conReintentos } from '../../utils/TransaccionesUtils.js';
+import { filtroTienda, datosTienda, idTienda, conTienda } from '../../utils/TenantUtils.js';
 
 const escaparRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -22,24 +23,26 @@ const normalizarCodigo = (codigo) => {
   return limpio || undefined;
 };
 
-const buscarPorCodigoExacto = (codigo) =>
-  Producto.findOne({ codigo: { $regex: `^${escaparRegex(codigo)}$`, $options: 'i' } });
+const buscarPorCodigoExacto = (codigo, tienda = null) =>
+  Producto.findOne(conTienda(tienda, { codigo: { $regex: `^${escaparRegex(codigo)}$`, $options: 'i' } }));
 
 const CODIGO_INTERNO_REGEX = /^NC-\d{6}$/;
 
-const intentarCodigoProducto = async () => {
+const claveContadorProducto = (tienda = null) => (tienda ? `producto:${tienda}` : 'producto');
+
+const intentarCodigoProducto = async (tienda = null) => {
   const counter = await Contador.findByIdAndUpdate(
-    'producto',
+    claveContadorProducto(tienda),
     { $inc: { secuencia: 1 } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
   const codigo = `NC-${String(counter.secuencia).padStart(6, '0')}`;
-  const repetido = await buscarPorCodigoExacto(codigo);
+  const repetido = await buscarPorCodigoExacto(codigo, tienda);
   return repetido ? null : codigo;
 };
 
-const sincronizarContadorProducto = async () => {
-  const ultimo = await Producto.findOne({ codigo: /^NC-\d{6}$/ })
+const sincronizarContadorProducto = async (tienda = null) => {
+  const ultimo = await Producto.findOne(conTienda(tienda, { codigo: /^NC-\d{6}$/ }))
     .sort({ codigo: -1 })
     .select('codigo')
     .lean();
@@ -47,26 +50,26 @@ const sincronizarContadorProducto = async () => {
   const secuencia = Number(String(ultimo.codigo).slice(3));
   if (!Number.isFinite(secuencia)) return;
   await Contador.findByIdAndUpdate(
-    'producto',
+    claveContadorProducto(tienda),
     { $max: { secuencia } },
     { upsert: true, setDefaultsOnInsert: true }
   );
 };
 
-const generarCodigoProducto = async () => {
+const generarCodigoProducto = async (tienda = null) => {
   for (let intento = 0; intento < 50; intento += 1) {
-    const codigo = await intentarCodigoProducto();
+    const codigo = await intentarCodigoProducto(tienda);
     if (codigo) return codigo;
   }
-  await sincronizarContadorProducto();
+  await sincronizarContadorProducto(tienda);
   for (let intento = 0; intento < 50; intento += 1) {
-    const codigo = await intentarCodigoProducto();
+    const codigo = await intentarCodigoProducto(tienda);
     if (codigo) return codigo;
   }
   throw new Error('No se pudo generar un código único de producto');
 };
 
-const registrarMovimiento = async ({ producto, talle, color, tipo, cantidad, empleado }, session) => {
+const registrarMovimiento = async ({ producto, talle, color, tipo, cantidad, empleado, tienda }, session) => {
   await MovimientoStock.create(
     [{
       producto: producto._id,
@@ -76,6 +79,7 @@ const registrarMovimiento = async ({ producto, talle, color, tipo, cantidad, emp
       tipo,
       cantidad,
       empleado: empleado || '',
+      ...(tienda ? { tienda } : {}),
     }],
     session ? { session } : undefined
   );
@@ -84,7 +88,7 @@ const registrarMovimiento = async ({ producto, talle, color, tipo, cantidad, emp
 export const obtenerProductos = async (req, res, next) => {
   try {
     const { search, categoria } = req.query;
-    const filter = {};
+    const filter = filtroTienda(req);
 
     if (search) {
       const safe = escaparRegex(search);
@@ -110,8 +114,9 @@ export const obtenerProductos = async (req, res, next) => {
 
 export const obtenerCategorias = async (req, res, next) => {
   try {
+    const tienda = idTienda(req);
     const categorias = await Producto.aggregate([
-      { $match: { categoria: { $nin: [null, ''] } } },
+      { $match: { ...(tienda ? { tienda: new mongoose.Types.ObjectId(tienda) } : {}), categoria: { $nin: [null, ''] } } },
       {
         $group: {
           _id: { $toLower: { $trim: { input: '$categoria' } } },
@@ -136,7 +141,7 @@ export const obtenerProductoPorCodigo = async (req, res, next) => {
     if (!codigo) {
       return res.status(400).json({ message: 'El código es requerido' });
     }
-    const product = await buscarPorCodigoExacto(codigo);
+    const product = await buscarPorCodigoExacto(codigo, idTienda(req));
     if (!product) {
       return res.status(404).json({ message: `No existe un producto con el código "${codigo}"` });
     }
@@ -148,7 +153,7 @@ export const obtenerProductoPorCodigo = async (req, res, next) => {
 
 export const siguienteCodigo = async (req, res, next) => {
   try {
-    const codigo = await generarCodigoProducto();
+    const codigo = await generarCodigoProducto(idTienda(req));
     res.json({ codigo });
   } catch (error) {
     next(error);
@@ -157,7 +162,7 @@ export const siguienteCodigo = async (req, res, next) => {
 
 export const obtenerProducto = async (req, res, next) => {
   try {
-    const product = await Producto.findById(req.params.id);
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) });
 
     if (!product) {
       return res.status(404).json({ message: 'Producto no encontrado' });
@@ -171,6 +176,7 @@ export const obtenerProducto = async (req, res, next) => {
 export const crearProducto = async (req, res, next) => {
   try {
     const data = schemaCrearProducto.parse(req.body);
+    const tienda = idTienda(req);
 
     if (data.variantes?.length > 0 && ((data.cantidad || 0) > 0 || (data.deposito || 0) > 0)) {
       return res.status(400).json({
@@ -178,7 +184,7 @@ export const crearProducto = async (req, res, next) => {
       });
     }
 
-    const existing = await Producto.findOne({ nombre: { $regex: `^${escaparRegex(data.nombre)}$`, $options: 'i' } });
+    const existing = await Producto.findOne(filtroTienda(req, { nombre: { $regex: `^${escaparRegex(data.nombre)}$`, $options: 'i' } }));
     if (existing) {
       return res.status(409).json({ message: `Ya existe un producto llamado "${data.nombre}"` });
     }
@@ -186,18 +192,18 @@ export const crearProducto = async (req, res, next) => {
     const codigoSolicitado = normalizarCodigo(data.codigo);
     let codigo;
     if (codigoSolicitado && CODIGO_INTERNO_REGEX.test(codigoSolicitado)) {
-      const repetido = await buscarPorCodigoExacto(codigoSolicitado);
+      const repetido = await buscarPorCodigoExacto(codigoSolicitado, tienda);
       if (!repetido) codigo = codigoSolicitado;
     }
-    if (!codigo) codigo = await generarCodigoProducto();
+    if (!codigo) codigo = await generarCodigoProducto(tienda);
 
     try {
-      const product = await Producto.create({ ...data, codigo });
+      const product = await Producto.create({ ...data, codigo, ...datosTienda(req) });
       return res.status(201).json(product);
     } catch (error) {
       if (error?.code === 11000) {
-        const alternativo = await generarCodigoProducto();
-        const product = await Producto.create({ ...data, codigo: alternativo });
+        const alternativo = await generarCodigoProducto(tienda);
+        const product = await Producto.create({ ...data, codigo: alternativo, ...datosTienda(req) });
         return res.status(201).json(product);
       }
       throw error;
@@ -213,7 +219,7 @@ export const actualizarProducto = async (req, res, next) => {
     session = await mongoose.startSession();
     session.startTransaction();
     const data = schemaActualizarProducto.parse(req.body);
-    const product = await Producto.findById(req.params.id).session(session);
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
 
     if (!product) {
       await session.abortTransaction();
@@ -221,10 +227,10 @@ export const actualizarProducto = async (req, res, next) => {
     }
 
     if (data.nombre) {
-      const existing = await Producto.findOne({
+      const existing = await Producto.findOne(filtroTienda(req, {
         nombre: { $regex: `^${escaparRegex(data.nombre)}$`, $options: 'i' },
         _id: { $ne: product._id },
-      }).session(session);
+      })).session(session);
       if (existing) {
         await session.abortTransaction();
         return res.status(409).json({ message: `Ya existe un producto llamado "${data.nombre}"` });
@@ -342,6 +348,7 @@ export const actualizarProducto = async (req, res, next) => {
         producto: product,
         ...movimiento,
         empleado: req.usuario?.nombre,
+        tienda: idTienda(req),
       }, session);
     }
 
@@ -362,7 +369,7 @@ export const agregarStock = async (req, res, next) => {
     session.startTransaction();
     const { cantidad, talle, color } = schemaAgregarStock.parse(req.body);
 
-    const product = await Producto.findById(req.params.id).session(session);
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
     if (!product) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Producto no encontrado' });
@@ -388,6 +395,7 @@ export const agregarStock = async (req, res, next) => {
       tipo: 'ajuste_salon',
       cantidad,
       empleado: req.usuario?.nombre,
+      tienda: idTienda(req),
     }, session);
 
     await session.commitTransaction();
@@ -407,7 +415,7 @@ export const agregarDeposito = async (req, res, next) => {
     session.startTransaction();
     const { cantidad, talle, color, modo } = schemaDeposito.parse(req.body);
 
-    const product = await Producto.findById(req.params.id).session(session);
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
     if (!product) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Producto no encontrado' });
@@ -445,6 +453,7 @@ export const agregarDeposito = async (req, res, next) => {
       tipo: modo === 'fijar' ? 'ajuste_deposito' : 'ingreso_deposito',
       cantidad: Math.abs(delta),
       empleado: req.usuario?.nombre,
+      tienda: idTienda(req),
     }, session);
 
     await session.commitTransaction();
@@ -464,7 +473,7 @@ export const reponerStock = async (req, res, next) => {
     session.startTransaction();
     const { cantidad, talle, color } = schemaMovimientoStock.parse(req.body);
 
-    const product = await Producto.findById(req.params.id).session(session);
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
     if (!product) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Producto no encontrado' });
@@ -487,10 +496,10 @@ export const reponerStock = async (req, res, next) => {
       }
       const variante = product.variantes[idx];
       actualizado = await Producto.findOneAndUpdate(
-        {
+        filtroTienda(req, {
           _id: product._id,
           variantes: { $elemMatch: { talle: variante.talle || '', color: variante.color || '', deposito: { $gte: cantidad } } },
-        },
+        }),
         { $inc: { 'variantes.$.deposito': -cantidad, 'variantes.$.cantidad': cantidad, cantidad } },
         { new: true, session }
       );
@@ -502,7 +511,7 @@ export const reponerStock = async (req, res, next) => {
         });
       }
       actualizado = await Producto.findOneAndUpdate(
-        { _id: product._id, deposito: { $gte: cantidad } },
+        filtroTienda(req, { _id: product._id, deposito: { $gte: cantidad } }),
         { $inc: { deposito: -cantidad, cantidad } },
         { new: true, session }
       );
@@ -522,6 +531,7 @@ export const reponerStock = async (req, res, next) => {
       tipo: 'reposicion',
       cantidad,
       empleado: req.usuario?.nombre,
+      tienda: idTienda(req),
     }, session);
 
     await session.commitTransaction();
@@ -542,7 +552,7 @@ export const pasarAlSalon = async (req, res, next) => {
     const { articulos } = schemaPasarSalon.parse(req.body);
 
     const ids = [...new Set(articulos.map((i) => String(i.producto)))];
-    const productos = await Producto.find({ _id: { $in: ids } }).session(session);
+    const productos = await Producto.find({ _id: { $in: ids }, ...filtroTienda(req) }).session(session);
     const porId = new Map(productos.map((p) => [String(p._id), p]));
     const movimientos = [];
 
@@ -585,6 +595,7 @@ export const pasarAlSalon = async (req, res, next) => {
         tipo: 'reposicion',
         cantidad: movimiento.cantidad,
         empleado: req.usuario?.nombre,
+        tienda: idTienda(req),
       }, session);
     }
 
@@ -605,7 +616,7 @@ export const retirarStock = async (req, res, next) => {
     session.startTransaction();
     const { cantidad, talle, color } = schemaMovimientoStock.parse(req.body);
 
-    const product = await Producto.findById(req.params.id).session(session);
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
     if (!product) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Producto no encontrado' });
@@ -634,10 +645,10 @@ export const retirarStock = async (req, res, next) => {
       }
       const variante = product.variantes[idx];
       actualizado = await Producto.findOneAndUpdate(
-        {
+        filtroTienda(req, {
           _id: product._id,
           variantes: { $elemMatch: { talle: variante.talle || '', color: variante.color || '', cantidad: { $gte: cantidad } } },
-        },
+        }),
         { $inc: { 'variantes.$.deposito': cantidad, 'variantes.$.cantidad': -cantidad, cantidad: -cantidad } },
         { new: true, session }
       );
@@ -649,7 +660,7 @@ export const retirarStock = async (req, res, next) => {
         });
       }
       actualizado = await Producto.findOneAndUpdate(
-        { _id: product._id, cantidad: { $gte: cantidad } },
+        filtroTienda(req, { _id: product._id, cantidad: { $gte: cantidad } }),
         { $inc: { deposito: cantidad, cantidad: -cantidad } },
         { new: true, session }
       );
@@ -669,6 +680,7 @@ export const retirarStock = async (req, res, next) => {
       tipo: 'retiro_deposito',
       cantidad,
       empleado: req.usuario?.nombre,
+      tienda: idTienda(req),
     }, session);
 
     await session.commitTransaction();
@@ -691,9 +703,10 @@ export const intercambiarProducto = async (req, res, next) => {
       titulo: 'Cambio registrado',
       mensaje: `${resultado.productoDevuelto.nombre} → ${resultado.productoCargado.nombre}`,
       url: '/returns',
+      tienda: idTienda(req),
       para: 'admins',
     });
-    void enviarStockBajo([resultado.productoCargado]);
+    void enviarStockBajo([resultado.productoCargado], idTienda(req));
 
     res.json({
       message: resultado.diferencia > 0
@@ -714,15 +727,15 @@ export const intercambiarProducto = async (req, res, next) => {
 
 export const eliminarProducto = async (req, res, next) => {
   try {
-    const product = await Producto.findById(req.params.id);
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!product) {
       return res.status(404).json({ message: 'Producto no encontrado' });
     }
 
     const [ventas, devoluciones, movimientos] = await Promise.all([
-      Venta.countDocuments({ $or: [{ 'articulos.producto': product._id }, { producto: product._id }] }),
-      Devolucion.countDocuments({ $or: [{ producto: product._id }, { productoCargar: product._id }] }),
-      MovimientoStock.countDocuments({ producto: product._id }),
+      Venta.countDocuments(filtroTienda(req, { $or: [{ 'articulos.producto': product._id }, { producto: product._id }] })),
+      Devolucion.countDocuments(filtroTienda(req, { $or: [{ producto: product._id }, { productoCargar: product._id }] })),
+      MovimientoStock.countDocuments(filtroTienda(req, { producto: product._id })),
     ]);
 
     if (ventas > 0 || devoluciones > 0 || movimientos > 0) {
@@ -731,7 +744,7 @@ export const eliminarProducto = async (req, res, next) => {
       });
     }
 
-    await Producto.findByIdAndDelete(product._id);
+    await Producto.findOneAndDelete({ _id: product._id, ...filtroTienda(req) });
     res.json({ message: 'Producto eliminado correctamente' });
   } catch (error) {
     next(error);
@@ -740,10 +753,10 @@ export const eliminarProducto = async (req, res, next) => {
 
 export const obtenerEstadisticasTablero = async (req, res, next) => {
   try {
-    const totalProductos = await Producto.countDocuments();
-    const totalCategorias = await Producto.distinct('categoria').then((cats) => cats.length);
-    const totalProveedores = await Proveedor.countDocuments();
-    const totalDevoluciones = await Devolucion.countDocuments();
+    const totalProductos = await Producto.countDocuments(filtroTienda(req));
+    const totalCategorias = await Producto.distinct('categoria', filtroTienda(req)).then((cats) => cats.length);
+    const totalProveedores = await Proveedor.countDocuments(filtroTienda(req));
+    const totalDevoluciones = await Devolucion.countDocuments(filtroTienda(req));
 
     res.json({
       totalProductos,
@@ -758,7 +771,7 @@ export const obtenerEstadisticasTablero = async (req, res, next) => {
 
 export const obtenerStockBajo = async (req, res, next) => {
   try {
-    const products = await Producto.find();
+    const products = await Producto.find(filtroTienda(req));
 
     const lowStock = [];
     for (const product of products) {

@@ -1,18 +1,21 @@
 import CierreCaja from '../modules/Venta/CierreCajaModel.js';
 import { buscarCajaAbierta } from './CajaUtils.js';
 
-export const filtroCierreDia = (fecha) => ({
+export const filtroCierreDia = (fecha, tienda = null) => ({
+  ...(tienda ? { tienda } : {}),
   fecha,
   $or: [{ turno: 'dia' }, { turno: { $exists: false } }, { turno: null }],
 });
 
-export const encontrarCierreDeFecha = async (fecha, session = null) => {
+export const encontrarCierreDeFecha = async (fecha, session = null, tienda = null) => {
   const d = new Date(fecha);
   if (Number.isNaN(d.getTime())) return null;
-  const query = CierreCaja.findOne({
+  const filtro = {
     fecha: { $lte: d, $gt: new Date(d.getTime() - 86400000) },
     estado: { $ne: 'abierto' },
-  })
+  };
+  if (tienda) filtro.tienda = tienda;
+  const query = CierreCaja.findOne(filtro)
     .select('_id fecha turno estado')
     .lean();
   if (session) query.session(session);
@@ -28,11 +31,11 @@ export const mensajeCierre = (cierre) => {
 
 export const MENSAJE_CIERRE_EN_CURSO = 'Hay un cierre de caja en curso. Esperá unos segundos y volvé a intentar.';
 
-export const verificarOperacionNoEnCierre = async (fechaOperacion, session = null) => {
-  const cierre = await encontrarCierreDeFecha(fechaOperacion, session);
+export const verificarOperacionNoEnCierre = async (fechaOperacion, session = null, tienda = null) => {
+  const cierre = await encontrarCierreDeFecha(fechaOperacion, session, tienda);
   if (cierre) return { bloqueado: true, motivo: 'cerrado', cierre };
 
-  const abierta = await buscarCajaAbierta(session);
+  const abierta = await buscarCajaAbierta(session, tienda);
   if (abierta) {
     const desde = new Date(abierta.abiertaEn || abierta.fecha);
     if (new Date(fechaOperacion) >= desde) {
@@ -46,7 +49,9 @@ export const verificarOperacionNoEnCierre = async (fechaOperacion, session = nul
     return { bloqueado: false };
   }
 
-  const cerrando = await CierreCaja.findOne({ estado: 'cerrando' })
+  const filtroCerrando = { estado: 'cerrando' };
+  if (tienda) filtroCerrando.tienda = tienda;
+  const cerrando = await CierreCaja.findOne(filtroCerrando)
     .select('_id fecha turno estado')
     .lean()
     .session(session);

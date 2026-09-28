@@ -6,6 +6,7 @@ import {
   schemaCompletarNotificacion,
 } from './NotificacionSchema.js';
 import { enviarEvento } from '../../services/PushService.js';
+import { filtroTienda, datosTienda, idTienda } from '../../utils/TenantUtils.js';
 
 const poblarUsuarios = (query) =>
   query
@@ -13,10 +14,10 @@ const poblarUsuarios = (query) =>
     .populate('realizadoPor', 'nombre')
     .populate('destinatario', 'nombre');
 
-const resolverDestinatario = async (destinatario) => {
+const resolverDestinatario = async (req, destinatario) => {
   if (!destinatario) return { destinatario: null, destinatarioNombre: '' };
   const empleado = await Usuario.findOne(
-    { _id: destinatario, activo: true, rol: 'user' },
+    filtroTienda(req, { _id: destinatario, activo: true, rol: 'user' }),
     'nombre'
   );
   if (!empleado) {
@@ -31,8 +32,8 @@ export const obtenerNotificaciones = async (req, res, next) => {
   try {
     const filtro =
       req.usuario.rol === 'admin'
-        ? {}
-        : { $or: [{ destinatario: null }, { destinatario: req.usuario.id }] };
+        ? filtroTienda(req)
+        : filtroTienda(req, { $or: [{ destinatario: null }, { destinatario: req.usuario.id }] });
     const notificaciones = await poblarUsuarios(
       Notificacion.find(filtro).sort({ fechaCreacion: -1 })
     );
@@ -52,11 +53,12 @@ export const obtenerNotificaciones = async (req, res, next) => {
 export const crearNotificacion = async (req, res, next) => {
   try {
     const data = schemaCrearNotificacion.parse(req.body);
-    const asignacion = await resolverDestinatario(data.destinatario);
+    const asignacion = await resolverDestinatario(req, data.destinatario);
     const notificacion = await Notificacion.create({
       ...data,
       ...asignacion,
       creadoPor: req.usuario.id,
+      ...datosTienda(req),
     });
 
     void enviarEvento({
@@ -64,6 +66,7 @@ export const crearNotificacion = async (req, res, next) => {
       titulo: 'Nuevo aviso',
       mensaje: data.titulo,
       url: '/notificaciones',
+      tienda: idTienda(req),
       para: asignacion.destinatario
         ? { usuarioId: asignacion.destinatario, nombre: asignacion.destinatarioNombre }
         : 'empleados',
@@ -80,9 +83,9 @@ export const actualizarNotificacion = async (req, res, next) => {
     const data = schemaActualizarNotificacion.parse(req.body);
     const cambios = { ...data };
     if ('destinatario' in data) {
-      Object.assign(cambios, await resolverDestinatario(data.destinatario));
+      Object.assign(cambios, await resolverDestinatario(req, data.destinatario));
     }
-    const notificacion = await Notificacion.findByIdAndUpdate(req.params.id, cambios, {
+    const notificacion = await Notificacion.findOneAndUpdate({ _id: req.params.id, ...filtroTienda(req) }, cambios, {
       new: true,
       runValidators: true,
     });
@@ -97,7 +100,7 @@ export const actualizarNotificacion = async (req, res, next) => {
 
 export const eliminarNotificacion = async (req, res, next) => {
   try {
-    const notificacion = await Notificacion.findByIdAndDelete(req.params.id);
+    const notificacion = await Notificacion.findOneAndDelete({ _id: req.params.id, ...filtroTienda(req) });
     if (!notificacion) {
       return res.status(404).json({ message: 'Aviso no encontrado' });
     }
@@ -112,13 +115,13 @@ export const completarNotificacion = async (req, res, next) => {
     const data = schemaCompletarNotificacion.parse(req.body);
     const esAdmin = req.usuario.rol === 'admin';
     const notificacion = await Notificacion.findOneAndUpdate(
-      {
+      filtroTienda(req, {
         _id: req.params.id,
         estado: { $ne: 'realizado' },
         ...(esAdmin
           ? {}
           : { $or: [{ destinatario: null }, { destinatario: req.usuario.id }] }),
-      },
+      }),
       {
         $set: {
           estado: 'realizado',
@@ -133,7 +136,7 @@ export const completarNotificacion = async (req, res, next) => {
       { new: true }
     );
     if (!notificacion) {
-      const existe = await Notificacion.findById(req.params.id);
+      const existe = await Notificacion.findOne({ _id: req.params.id, ...filtroTienda(req) });
       if (!existe) {
         return res.status(404).json({ message: 'Aviso no encontrado' });
       }
@@ -151,6 +154,7 @@ export const completarNotificacion = async (req, res, next) => {
       titulo: 'Aviso completado',
       mensaje: `${notificacion.titulo} · ${req.usuario.nombre}`,
       url: '/notificaciones',
+      tienda: idTienda(req),
       para: 'admins',
     });
 
@@ -162,7 +166,7 @@ export const completarNotificacion = async (req, res, next) => {
 
 export const reabrirNotificacion = async (req, res, next) => {
   try {
-    const notificacion = await Notificacion.findById(req.params.id);
+    const notificacion = await Notificacion.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!notificacion) {
       return res.status(404).json({ message: 'Aviso no encontrado' });
     }
@@ -186,7 +190,7 @@ export const reabrirNotificacion = async (req, res, next) => {
 export const marcarVistasAdmin = async (req, res, next) => {
   try {
     await Notificacion.updateMany(
-      { nuevaParaAdmin: true, vistosPor: { $ne: req.usuario.id } },
+      filtroTienda(req, { nuevaParaAdmin: true, vistosPor: { $ne: req.usuario.id } }),
       { $addToSet: { vistosPor: req.usuario.id } }
     );
     res.json({ message: 'Notificaciones marcadas como vistas' });

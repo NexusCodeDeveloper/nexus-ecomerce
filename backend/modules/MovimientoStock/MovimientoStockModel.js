@@ -2,11 +2,14 @@ import mongoose from 'mongoose';
 
 const stockMovementSchema = new mongoose.Schema(
   {
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+    },
     producto: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Producto',
       required: true,
-      index: true,
     },
     productoNombre: {
       type: String,
@@ -41,7 +44,8 @@ const stockMovementSchema = new mongoose.Schema(
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' } }
 );
 
-stockMovementSchema.index({ fechaCreacion: -1 });
-stockMovementSchema.index({ tipo: 1, fechaCreacion: -1 });
+stockMovementSchema.index({ tienda: 1, fechaCreacion: -1 });
+stockMovementSchema.index({ tienda: 1, tipo: 1, fechaCreacion: -1 });
+stockMovementSchema.index({ tienda: 1, producto: 1 });
 
 export default mongoose.model('MovimientoStock', stockMovementSchema, 'movimientosStock');

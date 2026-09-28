@@ -6,20 +6,23 @@ import {
   claveUsuarioSchema,
   activoUsuarioSchema,
 } from './UsuarioSchema.js';
+import { filtroTienda, datosTienda } from '../../utils/TenantUtils.js';
 
 const sinClave = '-clave -versionToken';
 
 const esMismoUsuario = (req, target) => String(target._id) === String(req.usuario.id);
 
-const ultimoAdminActivo = async (target) => {
+const ultimoAdminActivo = async (req, target) => {
   if (target.rol !== 'admin') return false;
-  const cantidad = await Usuario.countDocuments({ rol: 'admin', activo: true, _id: { $ne: target._id } });
+  const cantidad = await Usuario.countDocuments(
+    filtroTienda(req, { rol: 'admin', activo: true, _id: { $ne: target._id } })
+  );
   return cantidad === 0;
 };
 
 export const obtenerUsuarios = async (req, res, next) => {
   try {
-    const usuarios = await Usuario.find({}, sinClave).sort({ fechaCreacion: 1 });
+    const usuarios = await Usuario.find(filtroTienda(req), sinClave).sort({ fechaCreacion: 1 });
     res.json(usuarios);
   } catch (error) {
     next(error);
@@ -42,6 +45,7 @@ export const crearUsuario = async (req, res, next) => {
       clave: data.clave,
       rol: data.rol,
       activo: data.activo,
+      ...datosTienda(req),
     });
 
     const creado = usuario.toJSON();
@@ -55,7 +59,7 @@ export const crearUsuario = async (req, res, next) => {
 export const actualizarUsuario = async (req, res, next) => {
   try {
     const data = actualizarUsuarioSchema.parse(req.body);
-    const usuario = await Usuario.findById(req.params.id);
+    const usuario = await Usuario.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!usuario) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -65,7 +69,7 @@ export const actualizarUsuario = async (req, res, next) => {
     }
 
     if (data.rol !== undefined && usuario.rol !== data.rol) {
-      if (await ultimoAdminActivo(usuario)) {
+      if (await ultimoAdminActivo(req, usuario)) {
         return res.status(400).json({ message: 'No podés quitar el rol admin al último administrador activo' });
       }
       usuario.rol = data.rol;
@@ -95,7 +99,7 @@ export const actualizarUsuario = async (req, res, next) => {
 export const reiniciarClave = async (req, res, next) => {
   try {
     const { clave } = claveUsuarioSchema.parse(req.body);
-    const usuario = await Usuario.findById(req.params.id);
+    const usuario = await Usuario.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!usuario) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -117,7 +121,7 @@ export const reiniciarClave = async (req, res, next) => {
 export const cambiarActivo = async (req, res, next) => {
   try {
     const { activo } = activoUsuarioSchema.parse(req.body);
-    const usuario = await Usuario.findById(req.params.id);
+    const usuario = await Usuario.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!usuario) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -130,7 +134,7 @@ export const cambiarActivo = async (req, res, next) => {
       return res.status(400).json({ message: 'No podés desactivar tu propia cuenta' });
     }
 
-    if (!activo && (await ultimoAdminActivo(usuario))) {
+    if (!activo && (await ultimoAdminActivo(req, usuario))) {
       return res.status(400).json({ message: 'No podés desactivar al último administrador activo' });
     }
 
@@ -152,7 +156,7 @@ export const cambiarActivo = async (req, res, next) => {
 
 export const eliminarUsuario = async (req, res, next) => {
   try {
-    const usuario = await Usuario.findById(req.params.id);
+    const usuario = await Usuario.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!usuario) {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
@@ -165,7 +169,7 @@ export const eliminarUsuario = async (req, res, next) => {
       return res.status(400).json({ message: 'No podés eliminar tu propia cuenta' });
     }
 
-    if (usuario.activo && (await ultimoAdminActivo(usuario))) {
+    if (usuario.activo && (await ultimoAdminActivo(req, usuario))) {
       return res.status(400).json({ message: 'No podés eliminar al último administrador activo' });
     }
 

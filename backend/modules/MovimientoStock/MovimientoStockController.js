@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import MovimientoStock from './MovimientoStockModel.js';
 import { obtenerRango } from '../../utils/FechasUtils.js';
+import { filtroTienda } from '../../utils/TenantUtils.js';
 
 const TIPOS = MovimientoStock.schema.path('tipo').enumValues;
 
@@ -9,7 +10,7 @@ const escaparRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 export const obtenerMovimientosStock = async (req, res, next) => {
   try {
     const { producto, tipo, desde, hasta, buscar, limit = 100, offset = 0, tz } = req.query;
-    const filter = {};
+    const filter = filtroTienda(req);
 
     if (producto) {
       if (!mongoose.Types.ObjectId.isValid(producto)) {

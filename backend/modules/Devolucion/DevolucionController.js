@@ -4,6 +4,7 @@ import { enviarEvento } from '../../services/PushService.js';
 import { ejecutarDevolucion, revertirDevolucion } from './DevolucionService.js';
 import { responderErrorDeServicio } from '../../utils/RespuestaErrorUtils.js';
 import { conReintentos } from '../../utils/TransaccionesUtils.js';
+import { filtroTienda, idTienda } from '../../utils/TenantUtils.js';
 
 export const crearDevolucion = async (req, res, next) => {
   try {
@@ -15,6 +16,7 @@ export const crearDevolucion = async (req, res, next) => {
       titulo: 'Devolución registrada',
       mensaje: `${devolucion.producto?.nombre || 'Producto'} × ${data.cantidad}${data.venta ? ' · con ticket' : ' · sin ticket'}`,
       url: '/returns',
+      tienda: idTienda(req),
       para: 'admins',
     });
 
@@ -26,7 +28,7 @@ export const crearDevolucion = async (req, res, next) => {
 
 export const eliminarDevolucion = async (req, res, next) => {
   try {
-    await conReintentos(() => revertirDevolucion(req.params.id));
+    await conReintentos(() => revertirDevolucion(req.params.id, req.usuario));
     res.json({ message: 'Devolución eliminada correctamente' });
   } catch (error) {
     responderErrorDeServicio(error, res, next);
@@ -36,7 +38,7 @@ export const eliminarDevolucion = async (req, res, next) => {
 export const obtenerDevoluciones = async (req, res, next) => {
   try {
     const limite = Math.min(Math.max(Number(req.query.limit) || 500, 1), 2000);
-    const returns = await Devolucion.find()
+    const returns = await Devolucion.find(filtroTienda(req))
       .populate('producto', 'nombre categoria')
       .populate('productoCargar', 'nombre codigo')
       .populate('venta', 'ticketNumero total empleado')

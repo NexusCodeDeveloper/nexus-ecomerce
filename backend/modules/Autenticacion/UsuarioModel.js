@@ -22,8 +22,13 @@ const usuarioSchema = new mongoose.Schema(
     },
     rol: {
       type: String,
-      enum: ['admin', 'user'],
+      enum: ['superadmin', 'admin', 'user'],
       default: 'user',
+    },
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+      index: true,
     },
     activo: {
       type: Boolean,

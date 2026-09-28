@@ -10,6 +10,7 @@ const generarToken = (usuario) => {
       nombre: usuario.nombre,
       email: usuario.email,
       rol: usuario.rol,
+      tienda: usuario.tienda ? String(usuario.tienda) : null,
       versionToken: usuario.versionToken || 0,
     },
     process.env.JWT_SECRET,
@@ -41,6 +42,7 @@ export const iniciarSesion = async (req, res, next) => {
       nombre: usuario.nombre,
       email: usuario.email,
       rol: usuario.rol,
+      tienda: usuario.tienda || null,
       activo: usuario.activo,
       token,
     });

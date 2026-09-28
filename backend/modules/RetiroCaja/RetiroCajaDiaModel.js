@@ -1,6 +1,10 @@
 import mongoose from 'mongoose';
 
 const cashWithdrawalCounterSchema = new mongoose.Schema({
+  tienda: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tienda',
+  },
   caja: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'CierreCaja',

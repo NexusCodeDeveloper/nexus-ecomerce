@@ -11,7 +11,8 @@ const itemSchema = new mongoose.Schema({
 }, { _id: false });
 
 const saleSchema = new mongoose.Schema({
-  ticketNumero: { type: String, unique: true, sparse: true, trim: true },
+  tienda: { type: mongoose.Schema.Types.ObjectId, ref: 'Tienda' },
+  ticketNumero: { type: String, trim: true },
   articulos: [itemSchema],
   producto: { type: mongoose.Schema.Types.ObjectId, ref: 'Producto' },
   cantidad: { type: Number, min: 1 },
@@ -49,9 +50,10 @@ saleSchema.pre('save', function (next) {
   next();
 });
 
-saleSchema.index({ 'articulos.producto': 1, fechaCreacion: -1 });
-saleSchema.index({ fechaCreacion: -1 });
-saleSchema.index({ 'pagos.metodo': 1 });
-saleSchema.index({ estado: 1 });
+saleSchema.index({ tienda: 1, ticketNumero: 1 }, { unique: true, partialFilterExpression: { ticketNumero: { $type: 'string' } } });
+saleSchema.index({ tienda: 1, 'articulos.producto': 1, fechaCreacion: -1 });
+saleSchema.index({ tienda: 1, fechaCreacion: -1 });
+saleSchema.index({ tienda: 1, 'pagos.metodo': 1 });
+saleSchema.index({ tienda: 1, estado: 1 });
 
 export default mongoose.model('Venta', saleSchema, 'ventas');

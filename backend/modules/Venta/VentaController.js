@@ -15,6 +15,7 @@ import { indiceDeVariante, extraDeposito } from '../../utils/VariantesUtils.js';
 import { obtenerArticulos, unidadesNetasVenta, totalNetoVenta } from '../../utils/VentasUtils.js';
 import { filtroCierreDia, mensajeCierre, verificarOperacionNoEnCierre, MENSAJE_CIERRE_EN_CURSO } from '../../utils/CierresUtils.js';
 import { buscarCajaAbierta, respuestaSinCaja, MENSAJE_SIN_CAJA, cajaEsDeHoy, mensajeCajaAnterior } from '../../utils/CajaUtils.js';
+import { filtroTienda, idTienda, conTienda } from '../../utils/TenantUtils.js';
 import logger from '../../utils/LoggerUtils.js';
 
 const escaparRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -26,8 +27,9 @@ export const crearVenta = async (req, res, next) => {
     session = await mongoose.startSession();
     session.startTransaction();
     const data = schemaCrearVenta.parse(req.body);
+    const tienda = idTienda(req);
 
-    const caja = await buscarCajaAbierta(session);
+    const caja = await buscarCajaAbierta(session, tienda);
     if (!caja) {
       await session.abortTransaction();
       return res.status(409).json({ message: 'Antes de vender tenés que abrir la caja', code: 'SIN_CAJA' });
@@ -40,7 +42,7 @@ export const crearVenta = async (req, res, next) => {
     const articulos = [];
     const productosVendidos = [];
     const idsProductos = data.articulos.map((item) => item.producto);
-    const productos = await Producto.find({ _id: { $in: idsProductos } }).session(session);
+    const productos = await Producto.find(filtroTienda(req, { _id: { $in: idsProductos } })).session(session);
     const productosPorId = new Map(productos.map((p) => [p._id.toString(), p]));
 
     for (const item of data.articulos) {
@@ -100,6 +102,7 @@ export const crearVenta = async (req, res, next) => {
     }
 
     const venta = await Venta.create([{
+      ...(tienda ? { tienda } : {}),
       articulos,
       total,
       empleado: req.usuario.nombre,
@@ -115,12 +118,13 @@ export const crearVenta = async (req, res, next) => {
 
     await session.commitTransaction();
 
-    void enviarStockBajo(productosVendidos);
+    void enviarStockBajo(productosVendidos, tienda);
     void enviarEvento({
       tipo: 'venta',
       titulo: 'Nueva venta',
       mensaje: `$${Number(total).toLocaleString('es-AR', { minimumFractionDigits: 2 })} · ${req.usuario.nombre}`,
       url: '/sales',
+      tienda,
       para: { usuarioId: req.usuario.id, nombre: req.usuario.nombre },
     });
 
@@ -138,7 +142,8 @@ export const eliminarVenta = async (req, res, next) => {
   try {
     session = await mongoose.startSession();
     session.startTransaction();
-    const venta = await Venta.findById(req.params.id).session(session);
+    const tienda = idTienda(req);
+    const venta = await Venta.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
     if (!venta) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Venta no encontrada' });
@@ -148,7 +153,7 @@ export const eliminarVenta = async (req, res, next) => {
       return res.status(400).json({ message: 'No se puede eliminar una venta ya devuelta' });
     }
 
-    const verificacion = await verificarOperacionNoEnCierre(venta.fechaCreacion, session);
+    const verificacion = await verificarOperacionNoEnCierre(venta.fechaCreacion, session, tienda);
     if (verificacion.bloqueado) {
       await session.abortTransaction();
       return res.status(409).json({
@@ -160,16 +165,16 @@ export const eliminarVenta = async (req, res, next) => {
 
     const articulos = obtenerArticulos(venta);
 
-    const returnCount = await Devolucion.countDocuments({
-      $or: [{ venta: venta._id }, { ventaDiferenciaId: venta._id }],
-    }).session(session);
+    const returnCount = await Devolucion.countDocuments(
+      filtroTienda(req, { $or: [{ venta: venta._id }, { ventaDiferenciaId: venta._id }] })
+    ).session(session);
     if (returnCount > 0) {
       await session.abortTransaction();
       return res.status(400).json({ message: 'No se puede eliminar la venta porque tiene devoluciones o cambios asociados' });
     }
 
     const idsProductos = articulos.map((item) => item.producto).filter(Boolean);
-    const productos = await Producto.find({ _id: { $in: idsProductos } }).session(session);
+    const productos = await Producto.find(filtroTienda(req, { _id: { $in: idsProductos } })).session(session);
     const productosPorId = new Map(productos.map((p) => [p._id.toString(), p]));
     const modificados = new Map();
 
@@ -193,7 +198,7 @@ export const eliminarVenta = async (req, res, next) => {
       await product.save({ session });
     }
 
-    await Venta.findByIdAndDelete(req.params.id).session(session);
+    await Venta.findOneAndDelete(filtroTienda(req, { _id: req.params.id })).session(session);
     await session.commitTransaction();
     res.json({ message: 'Venta eliminada correctamente' });
   } catch (error) {
@@ -207,7 +212,7 @@ export const eliminarVenta = async (req, res, next) => {
 export const obtenerVentas = async (req, res, next) => {
   try {
     const { desde, hasta, offset = 0, numero, codigo, buscar } = req.query;
-    const filter = {};
+    const filter = filtroTienda(req);
 
     if (desde || hasta) {
       filter.fechaCreacion = obtenerRango(desde, hasta, offset);
@@ -221,9 +226,9 @@ export const obtenerVentas = async (req, res, next) => {
     const or = [];
     const codigoStr = String(codigo || '').trim();
     if (codigoStr) {
-      const product = await Producto.findOne({
+      const product = await Producto.findOne(filtroTienda(req, {
         codigo: { $regex: `^${escaparRegex(codigoStr)}$`, $options: 'i' },
-      })
+      }))
         .select('_id')
         .lean();
       if (!product) {
@@ -236,9 +241,9 @@ export const obtenerVentas = async (req, res, next) => {
     if (buscarStr) {
       const safe = escaparRegex(buscarStr);
       or.push({ ticketNumero: { $regex: `^(T-)?${safe}`, $options: 'i' } });
-      const product = await Producto.findOne({
+      const product = await Producto.findOne(filtroTienda(req, {
         codigo: { $regex: `^${safe}$`, $options: 'i' },
-      })
+      }))
         .select('_id')
         .lean();
       if (product) {
@@ -266,7 +271,7 @@ export const obtenerMasVendidos = async (req, res, next) => {
   try {
     const { desde, hasta, offset = 0, limit = 5 } = req.query;
     const limite = Math.min(Math.max(Number(limit) || 5, 1), 50);
-    const filter = {};
+    const filter = filtroTienda(req);
 
     if (desde || hasta) {
       filter.fechaCreacion = obtenerRango(desde, hasta, offset);
@@ -298,7 +303,7 @@ export const obtenerMasVendidos = async (req, res, next) => {
       .sort((a, b) => b.totalVendido - a.totalVendido)
       .slice(0, limite);
 
-    const products = await Producto.find({ _id: { $in: sorted.map(r => r.productoId) } });
+    const products = await Producto.find(filtroTienda(req, { _id: { $in: sorted.map(r => r.productoId) } }));
     const productNames = {};
     for (const p of products) {
       productNames[p._id.toString()] = { nombre: p.nombre, categoria: p.categoria };
@@ -317,15 +322,16 @@ export const obtenerMasVendidos = async (req, res, next) => {
 const calcularResumenCaja = async (caja) => {
   const desde = caja.abiertaEn || caja.fecha;
   const hasta = caja.cerradaEn || new Date();
+  const tienda = caja.tienda || null;
 
-  const sales = await Venta.find({ fechaCreacion: { $gte: desde, $lt: hasta } })
+  const sales = await Venta.find(conTienda(tienda, { fechaCreacion: { $gte: desde, $lt: hasta } }))
     .populate('articulos.producto', 'nombre categoria')
     .populate('producto', 'nombre categoria');
 
-  const retiros = await RetiroCaja.find({ fechaCreacion: { $gte: desde, $lt: hasta } }).sort({ fechaCreacion: 1 });
+  const retiros = await RetiroCaja.find(conTienda(tienda, { fechaCreacion: { $gte: desde, $lt: hasta } })).sort({ fechaCreacion: 1 });
   const totalRetiros = Math.round(retiros.reduce((sum, r) => sum + r.monto, 0) * 100) / 100;
 
-  const devoluciones = await Devolucion.find({ fechaCreacion: { $gte: desde, $lt: hasta } });
+  const devoluciones = await Devolucion.find(conTienda(tienda, { fechaCreacion: { $gte: desde, $lt: hasta } }));
   const totalDevoluciones = Math.round(devoluciones.reduce((sum, r) => sum + (r.montoDevuelto || 0), 0) * 100) / 100;
   const efectivoDevuelto = Math.round(devoluciones.reduce((sum, r) => sum + (r.efectivoDevuelto || 0), 0) * 100) / 100;
 
@@ -399,8 +405,9 @@ export const abrirCaja = async (req, res, next) => {
     const data = schemaAbrirCaja.parse(req.body);
     const offset = Number.isFinite(Number(data.offset)) ? Number(data.offset) : 0;
     const fechaDate = inicioDeDia(offset);
+    const tienda = idTienda(req);
 
-    const abierta = await buscarCajaAbierta();
+    const abierta = await buscarCajaAbierta(null, tienda);
     if (abierta) {
       const fecha = new Date(abierta.fecha).toLocaleDateString('es-AR');
       return res.status(409).json({
@@ -408,7 +415,7 @@ export const abrirCaja = async (req, res, next) => {
       });
     }
 
-    const yaCerrada = await CierreCaja.findOne({ ...filtroCierreDia(fechaDate), estado: { $ne: 'abierto' } });
+    const yaCerrada = await CierreCaja.findOne({ ...filtroCierreDia(fechaDate, tienda), estado: { $ne: 'abierto' } });
     if (yaCerrada) {
       return res.status(409).json({
         message: yaCerrada.estado === 'cerrando' ? MENSAJE_CIERRE_EN_CURSO : 'La caja de hoy ya fue cerrada.',
@@ -418,6 +425,7 @@ export const abrirCaja = async (req, res, next) => {
     let caja;
     try {
       caja = await CierreCaja.create({
+        ...(tienda ? { tienda } : {}),
         fecha: fechaDate,
         turno: 'dia',
         estado: 'abierto',
@@ -441,6 +449,7 @@ export const abrirCaja = async (req, res, next) => {
       titulo: 'Caja abierta',
       mensaje: `${data.nombre} abrió la caja${data.fondoInicial > 0 ? ` con un fondo de $${Number(data.fondoInicial).toLocaleString('es-AR', { minimumFractionDigits: 2 })}` : ''}`,
       url: '/sales',
+      tienda,
       para: 'admins',
     });
 
@@ -455,10 +464,11 @@ export const obtenerCajaAbierta = async (req, res, next) => {
     const offsetRaw = Number(req.query.offset);
     const offset = Number.isFinite(offsetRaw) ? offsetRaw : 0;
     const hoy = inicioDeDia(offset);
-    const cierreHoy = await CierreCaja.findOne({ ...filtroCierreDia(hoy), estado: 'cerrado' })
+    const tienda = idTienda(req);
+    const cierreHoy = await CierreCaja.findOne({ ...filtroCierreDia(hoy, tienda), estado: 'cerrado' })
       .select('_id fecha cerradaEn cerradoPor total cantidad reaperturas');
 
-    const caja = await buscarCajaAbierta();
+    const caja = await buscarCajaAbierta(null, tienda);
     if (!caja) {
       return res.json({ caja: null, resumen: null, cierreHoy, esDeHoy: false });
     }
@@ -478,15 +488,16 @@ export const cerrarCaja = async (req, res, next) => {
   try {
     const data = schemaCerrarCaja.parse(req.body);
     const offset = Number.isFinite(Number(data.offset)) ? Number(data.offset) : 0;
+    const tienda = idTienda(req);
 
     let caja = await CierreCaja.findOneAndUpdate(
-      { estado: 'abierto' },
+      filtroTienda(req, { estado: 'abierto' }),
       { $set: { estado: 'cerrando', cerradaEn: new Date() } },
       { new: true }
     );
 
     if (!caja) {
-      caja = await CierreCaja.findOne({ estado: 'cerrando' });
+      caja = await CierreCaja.findOne(filtroTienda(req, { estado: 'cerrando' }));
       if (!caja) {
         return res.status(409).json({ message: 'No hay una caja abierta para cerrar' });
       }
@@ -553,6 +564,7 @@ export const cerrarCaja = async (req, res, next) => {
       titulo: 'Cierre de caja',
       mensaje: `Día · $${Number(actualizada.total).toLocaleString('es-AR', { minimumFractionDigits: 2 })} · ${data.nombre}`,
       url: '/sales',
+      tienda,
       para: 'admins',
     });
 
@@ -576,8 +588,9 @@ export const reabrirCaja = async (req, res, next) => {
     const data = schemaReabrirCaja.parse(req.body);
     const offset = Number.isFinite(Number(data.offset)) ? Number(data.offset) : 0;
     const hoy = inicioDeDia(offset);
+    const tienda = idTienda(req);
 
-    const abierta = await buscarCajaAbierta();
+    const abierta = await buscarCajaAbierta(null, tienda);
     if (abierta) {
       const fecha = new Date(abierta.fecha).toLocaleDateString('es-AR');
       return res.status(409).json({
@@ -585,7 +598,7 @@ export const reabrirCaja = async (req, res, next) => {
       });
     }
 
-    const cerrada = await CierreCaja.findOne({ ...filtroCierreDia(hoy), estado: 'cerrado' });
+    const cerrada = await CierreCaja.findOne({ ...filtroCierreDia(hoy, tienda), estado: 'cerrado' });
     if (!cerrada) {
       return res.status(409).json({ message: 'No hay una caja cerrada de hoy para reabrir' });
     }
@@ -610,6 +623,7 @@ export const reabrirCaja = async (req, res, next) => {
       titulo: 'Caja reabierta',
       mensaje: `${data.nombre} reabrió la caja`,
       url: '/sales',
+      tienda,
       para: 'admins',
     });
 
@@ -622,7 +636,7 @@ export const reabrirCaja = async (req, res, next) => {
 export const obtenerCierresCaja = async (req, res, next) => {
   try {
     const { desde, hasta, offset = 0, agrupar = 'turno' } = req.query;
-    const filter = { estado: 'cerrado' };
+    const filter = filtroTienda(req, { estado: 'cerrado' });
 
     if (desde || hasta) {
       filter.fecha = obtenerRango(desde, hasta, offset);
@@ -685,7 +699,7 @@ export const obtenerCierresCaja = async (req, res, next) => {
 
 export const eliminarCierreCaja = async (req, res, next) => {
   try {
-    const close = await CierreCaja.findById(req.params.id);
+    const close = await CierreCaja.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!close) {
       return res.status(404).json({ message: 'Cierre no encontrado' });
     }
@@ -696,7 +710,7 @@ export const eliminarCierreCaja = async (req, res, next) => {
       return res.status(409).json({ message: MENSAJE_CIERRE_EN_CURSO });
     }
     await RetiroCajaDia.deleteMany({ caja: close._id });
-    await CierreCaja.findByIdAndDelete(req.params.id);
+    await CierreCaja.findOneAndDelete(filtroTienda(req, { _id: req.params.id }));
     res.json({ message: 'Cierre eliminado correctamente' });
   } catch (error) {
     next(error);
@@ -719,7 +733,7 @@ const obtenerVentanaDeCierre = async (close) => {
 
   if (!desde) {
     if (close.turno === 'tarde') {
-      const mananaClose = await CierreCaja.findOne({ fecha, turno: 'manana' });
+      const mananaClose = await CierreCaja.findOne(conTienda(close.tienda, { fecha, turno: 'manana' }));
       desde = (mananaClose && mananaClose.hasta) || fecha;
     } else {
       desde = fecha;
@@ -729,7 +743,7 @@ const obtenerVentanaDeCierre = async (close) => {
   if (!hasta) {
     hasta = new Date(fecha.getTime() + dayMs);
     if (close.turno === 'manana') {
-      const tardeClose = await CierreCaja.findOne({ fecha, turno: 'tarde' });
+      const tardeClose = await CierreCaja.findOne(conTienda(close.tienda, { fecha, turno: 'tarde' }));
       if (tardeClose?.desde && tardeClose.desde < hasta) {
         hasta = tardeClose.desde;
       }
@@ -741,7 +755,7 @@ const obtenerVentanaDeCierre = async (close) => {
 
 export const reenviarMailCierre = async (req, res, next) => {
   try {
-    const close = await CierreCaja.findById(req.params.id);
+    const close = await CierreCaja.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!close) {
       return res.status(404).json({ message: 'Cierre no encontrado' });
     }
@@ -753,13 +767,13 @@ export const reenviarMailCierre = async (req, res, next) => {
 
     const { desde, hasta } = await obtenerVentanaDeCierre(close);
 
-    const sales = await Venta.find({ fechaCreacion: { $gte: desde, $lt: hasta } })
+    const sales = await Venta.find(conTienda(close.tienda, { fechaCreacion: { $gte: desde, $lt: hasta } }))
       .populate('articulos.producto', 'nombre categoria')
       .populate('producto', 'nombre categoria');
 
     let totalDia = null;
     if (close.turno === 'tarde') {
-      const mananaClose = await CierreCaja.findOne({ fecha: close.fecha, turno: 'manana' });
+      const mananaClose = await CierreCaja.findOne(conTienda(close.tienda, { fecha: close.fecha, turno: 'manana' }));
       if (mananaClose) {
         totalDia = {
           total: mananaClose.total + close.total,
@@ -923,7 +937,7 @@ export const asegurarNumerosTicket = async () => {
   let count = 0;
 
   for await (const venta of cursor) {
-    venta.ticketNumero = await generarTicketNumero();
+    venta.ticketNumero = await generarTicketNumero(venta.tienda || null);
     await venta.save();
     count++;
   }
@@ -943,7 +957,7 @@ export const migrarTickets = async (req, res, next) => {
 export const obtenerEstadisticasVentas = async (req, res, next) => {
   try {
     const { desde, hasta, offset = 0 } = req.query;
-    const filter = {};
+    const filter = filtroTienda(req);
 
     if (desde || hasta) {
       filter.fechaCreacion = obtenerRango(desde, hasta, offset);

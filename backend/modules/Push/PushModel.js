@@ -2,6 +2,10 @@ import mongoose from 'mongoose';
 
 const pushSubscriptionSchema = new mongoose.Schema(
   {
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+    },
     endpoint: {
       type: String,
       required: true,
@@ -23,5 +27,6 @@ const pushSubscriptionSchema = new mongoose.Schema(
 pushSubscriptionSchema.index({ rol: 1 });
 pushSubscriptionSchema.index({ nombre: 1 });
 pushSubscriptionSchema.index({ usuarioId: 1 });
+pushSubscriptionSchema.index({ tienda: 1, usuarioId: 1 });
 
 export default mongoose.model('SuscripcionPush', pushSubscriptionSchema, 'suscripcionesPush');
