@@ -12,9 +12,12 @@ import {
   intercambiarProducto,
   agregarStock,
   agregarDeposito,
+  agregarCatalogo,
   reponerStock,
   pasarAlSalon,
+  pasarAlCatalogo,
   retirarStock,
+  retirarDelCatalogo,
   obtenerStockBajo,
 } from './ProductoController.js';
 import { proteger, admin } from '../../middlewares/AutenticacionMiddleware.js';
@@ -35,9 +38,12 @@ router.post('/', admin, crearProducto);
 router.put('/:id', admin, actualizarProducto);
 router.put('/:id/agregar-stock', admin, agregarStock);
 router.put('/:id/deposito', admin, agregarDeposito);
+router.put('/:id/catalogo', admin, agregarCatalogo);
 router.post('/pasar-salon', pasarAlSalon);
+router.post('/pasar-catalogo', pasarAlCatalogo);
 router.post('/:id/reponer', reponerStock);
 router.post('/:id/retirar', admin, retirarStock);
+router.post('/:id/retirar-catalogo', admin, retirarDelCatalogo);
 router.post('/intercambio', intercambiarProducto);
 router.delete('/:id', admin, eliminarProducto);
 
