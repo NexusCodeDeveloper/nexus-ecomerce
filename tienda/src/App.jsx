@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Navigate, Outlet, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, Outlet, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import Catalogo from './pages/Catalogo';
 import Checkout from './pages/Checkout';
+import Registro from './pages/Registro';
 import { CarritoProvider } from './context/CarritoContext';
 
 const TiendaLayout = () => {
@@ -41,6 +42,12 @@ const Inicio = () => {
         >
           Ver catálogo
         </button>
+        <p className="mt-4 text-xs text-slate-400">
+          ¿Querés vender online?{' '}
+          <Link to="/registro" className="font-semibold text-slate-600">
+            Creá tu tienda
+          </Link>
+        </p>
       </form>
     </div>
   );
@@ -50,6 +57,7 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={<Inicio />} />
+      <Route path="/registro" element={<Registro />} />
       <Route path="/:slug" element={<TiendaLayout />}>
         <Route index element={<Catalogo />} />
         <Route path="checkout" element={<Checkout />} />
