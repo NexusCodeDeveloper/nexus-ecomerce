@@ -12,6 +12,7 @@ import { contextoPeticion, registradorPeticiones } from './middlewares/RequestLo
 import { manejadorErrores } from './middlewares/ErrorMiddleware.js';
 import AutenticacionRoutes from './modules/Autenticacion/AutenticacionRoutes.js';
 import TiendaRoutes from './modules/Tienda/TiendaRoutes.js';
+import SuperadminRoutes from './modules/Superadmin/SuperadminRoutes.js';
 import ProveedorRoutes from './modules/Proveedor/ProveedorRoutes.js';
 import ProductoRoutes from './modules/Producto/ProductoRoutes.js';
 import MovimientoStockRoutes from './modules/MovimientoStock/MovimientoStockRoutes.js';
@@ -267,6 +268,7 @@ app.use('/api/auth/login', authLimiter);
 app.use('/api/tiendas/registro', authLimiter);
 app.use('/api/auth', AutenticacionRoutes);
 app.use('/api/tiendas', TiendaRoutes);
+app.use('/api/superadmin', SuperadminRoutes);
 app.use('/api/proveedores', ProveedorRoutes);
 app.use('/api/usuarios', UsuarioRoutes);
 app.use('/api/productos', ProductoRoutes);
