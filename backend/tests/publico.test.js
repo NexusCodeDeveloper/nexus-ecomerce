@@ -30,7 +30,7 @@ const crearTienda = (slug, extra = {}) =>
   Tienda.create({ nombre: `Tienda ${slug}`, slug, estado: 'activa', whatsapp: '5491122334455', ...extra });
 
 const crearProducto = (tienda, extra = {}) =>
-  Producto.create({ tienda: tienda._id, nombre: 'Remera', precio: 1500, cantidad: 5, categoria: 'Ropa', ...extra });
+  Producto.create({ tienda: tienda._id, nombre: 'Remera', precio: 1500, cantidad: 5, catalogo: 5, categoria: 'Ropa', ...extra });
 
 const ejecutarMiddleware = async (middleware, req) => {
   let statusCode = 200;
@@ -163,7 +163,7 @@ test('los pedidos se numeran por tienda de forma independiente', async () => {
 
 test('no se puede pedir mas stock del disponible', async () => {
   const tienda = await crearTienda('sin-stock');
-  const producto = await crearProducto(tienda, { cantidad: 1 });
+  const producto = await crearProducto(tienda, { cantidad: 1, catalogo: 1 });
 
   const res = await runHandler(crearPedidoPublico, {
     tienda,
@@ -173,6 +173,49 @@ test('no se puede pedir mas stock del disponible', async () => {
   assert.equal(res.status, 400);
   assert.equal(res.body.codigo, 'SIN_STOCK');
   assert.equal(await Pedido.countDocuments(), 0);
+  assert.equal((await Producto.findById(producto._id)).catalogo, 1);
+});
+
+test('el pedido descuenta stock del catalogo', async () => {
+  const tienda = await crearTienda('descuenta-catalogo');
+  const producto = await crearProducto(tienda, { catalogo: 4 });
+
+  const res = await runHandler(crearPedidoPublico, {
+    tienda,
+    body: { cliente: { nombre: 'Ana', telefono: '1144556677' }, items: [{ producto: String(producto._id), cantidad: 2 }] },
+  });
+
+  assert.equal(res.status, 201);
+  assert.equal((await Producto.findById(producto._id)).catalogo, 2);
+});
+
+test('cancelar un pedido devuelve el stock al catalogo', async () => {
+  const tienda = await crearTienda('cancela-pedido');
+  const producto = await crearProducto(tienda, { catalogo: 4 });
+
+  const creado = await runHandler(crearPedidoPublico, {
+    tienda,
+    body: { cliente: { nombre: 'Ana', telefono: '1144556677' }, items: [{ producto: String(producto._id), cantidad: 3 }] },
+  });
+  assert.equal((await Producto.findById(producto._id)).catalogo, 1);
+
+  const cancelado = await runHandler(cambiarEstadoPedido, {
+    usuario: { id: 'u1', nombre: 'Admin', rol: 'admin', tienda: String(tienda._id) },
+    params: { id: String(creado.body.pedido._id) },
+    body: { estado: 'cancelado' },
+  });
+
+  assert.equal(cancelado.status, 200);
+  assert.equal(cancelado.body.stockDescontado, false);
+  assert.equal((await Producto.findById(producto._id)).catalogo, 4);
+
+  const recancelado = await runHandler(cambiarEstadoPedido, {
+    usuario: { id: 'u1', nombre: 'Admin', rol: 'admin', tienda: String(tienda._id) },
+    params: { id: String(creado.body.pedido._id) },
+    body: { estado: 'cancelado' },
+  });
+  assert.equal(recancelado.status, 200);
+  assert.equal((await Producto.findById(producto._id)).catalogo, 4);
 });
 
 test('no se puede pedir un producto de otra tienda', async () => {
