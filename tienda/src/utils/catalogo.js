@@ -16,13 +16,13 @@ export const disponibleDe = (producto, talle = '', color = '') => {
     const variante = producto.variantes.find(
       (v) => String(v.talle || '') === String(talle || '') && String(v.color || '') === String(color || '')
     );
-    return variante?.cantidad || 0;
+    return variante?.catalogo || 0;
   }
-  return producto?.cantidad || 0;
+  return producto?.catalogo || 0;
 };
 
 export const variantesDisponibles = (producto) =>
-  (producto?.variantes || []).filter((v) => (v.cantidad || 0) > 0);
+  (producto?.variantes || []).filter((v) => (v.catalogo || 0) > 0);
 
 export const claveItem = (productoId, talle = '', color = '') => `${productoId}|${talle}|${color}`;
 

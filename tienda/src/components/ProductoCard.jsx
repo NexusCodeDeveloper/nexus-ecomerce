@@ -3,8 +3,8 @@ import { formatearMoneda } from '../utils/catalogo';
 const ProductoCard = ({ producto, onAgregar }) => {
   const tieneVariantes = producto.variantes?.length > 0;
   const stock = tieneVariantes
-    ? producto.variantes.reduce((suma, variante) => suma + (variante.cantidad || 0), 0)
-    : producto.cantidad || 0;
+    ? producto.variantes.reduce((suma, variante) => suma + (variante.catalogo || 0), 0)
+    : producto.catalogo || 0;
   const sinStock = stock <= 0;
 
   return (

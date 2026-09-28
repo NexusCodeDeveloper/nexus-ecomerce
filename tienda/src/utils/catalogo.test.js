@@ -23,18 +23,18 @@ describe('utilidades del catalogo', () => {
   });
 
   it('calcula el disponible segun variante', () => {
-    const producto = { cantidad: 3, variantes: [{ talle: 'M', color: 'Rojo', cantidad: 2 }] };
+    const producto = { catalogo: 3, variantes: [{ talle: 'M', color: 'Rojo', catalogo: 2 }] };
     expect(disponibleDe(producto)).toBe(0);
     expect(disponibleDe(producto, 'M', 'Rojo')).toBe(2);
     expect(disponibleDe(producto, 'L', 'Rojo')).toBe(0);
-    expect(disponibleDe({ cantidad: 3 })).toBe(3);
+    expect(disponibleDe({ catalogo: 3 })).toBe(3);
   });
 
   it('lista solo variantes con stock', () => {
     const producto = {
       variantes: [
-        { talle: 'M', color: 'Rojo', cantidad: 2 },
-        { talle: 'L', color: 'Azul', cantidad: 0 },
+        { talle: 'M', color: 'Rojo', catalogo: 2 },
+        { talle: 'L', color: 'Azul', catalogo: 0 },
       ],
     };
     expect(variantesDisponibles(producto)).toHaveLength(1);
