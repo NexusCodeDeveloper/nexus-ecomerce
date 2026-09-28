@@ -11,6 +11,7 @@ const itemSchema = new mongoose.Schema(
     precio: { ...campoCentavosPositivo, required: true },
     talle: { type: String, trim: true, default: '' },
     color: { type: String, trim: true, default: '' },
+    conVariante: { type: Boolean, default: false },
     subtotal: { ...campoCentavosPositivo, required: true },
   },
   { _id: false }
@@ -37,6 +38,7 @@ const pedidoSchema = new mongoose.Schema(
     total: { ...campoCentavosPositivo, required: true },
     estado: { type: String, enum: ESTADOS_PEDIDO, default: 'pendiente' },
     metodoPago: { type: String, enum: ['transferencia', 'mercadopago', 'efectivo'], default: 'transferencia' },
+    stockDescontado: { type: Boolean, default: true },
     historial: [{
       estado: { type: String, enum: ESTADOS_PEDIDO },
       fecha: { type: Date, default: Date.now },

@@ -22,9 +22,9 @@ const siguienteNumeroPedido = async (tiendaId) => {
 const disponibleDe = (producto, talle, color) => {
   if (producto.variantes?.length > 0) {
     const idx = indiceDeVariante(producto, talle, color);
-    return idx === -1 ? 0 : (producto.variantes[idx].cantidad || 0);
+    return idx === -1 ? 0 : (producto.variantes[idx].catalogo || 0);
   }
-  return producto.cantidad || 0;
+  return producto.catalogo || 0;
 };
 
 export const obtenerTiendaPublica = (req, res) => {
@@ -53,7 +53,7 @@ export const obtenerProductosPublicos = async (req, res, next) => {
 
     const limite = Math.min(Math.max(Number(req.query.limit) || 500, 1), 500);
     const productos = await Producto.find(filtro)
-      .select('nombre precio categoria colores variantes cantidad deposito')
+      .select('nombre precio categoria colores variantes catalogo')
       .sort({ nombre: 1 })
       .limit(limite);
 
@@ -91,12 +91,15 @@ export const obtenerCategoriasPublicas = async (req, res, next) => {
 };
 
 export const crearPedidoPublico = async (req, res, next) => {
+  const session = await mongoose.startSession();
   try {
     const data = schemaPedidoPublico.parse(req.body);
     const tienda = req.tienda;
 
+    session.startTransaction();
+
     const ids = [...new Set(data.items.map((item) => item.producto))];
-    const productos = await Producto.find({ tienda: tienda._id, _id: { $in: ids } });
+    const productos = await Producto.find({ tienda: tienda._id, _id: { $in: ids } }).session(session);
     const porId = new Map(productos.map((producto) => [String(producto._id), producto]));
 
     const items = [];
@@ -105,13 +108,47 @@ export const crearPedidoPublico = async (req, res, next) => {
     for (const item of data.items) {
       const producto = porId.get(String(item.producto));
       if (!producto) {
+        await session.abortTransaction();
         return res.status(400).json({
           message: 'Uno de los productos ya no está disponible',
           codigo: 'PRODUCTO_NO_DISPONIBLE',
         });
       }
 
+      const conVariante = producto.variantes?.length > 0;
+
       if (disponibleDe(producto, item.talle, item.color) < item.cantidad) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          message: `No hay stock suficiente de "${producto.nombre}"`,
+          codigo: 'SIN_STOCK',
+        });
+      }
+
+      const descontado = conVariante
+        ? await Producto.findOneAndUpdate(
+            {
+              _id: producto._id,
+              tienda: tienda._id,
+              variantes: {
+                $elemMatch: {
+                  talle: item.talle || '',
+                  color: item.color || '',
+                  catalogo: { $gte: item.cantidad },
+                },
+              },
+            },
+            { $inc: { 'variantes.$.catalogo': -item.cantidad, catalogo: -item.cantidad } },
+            { new: true, session }
+          )
+        : await Producto.findOneAndUpdate(
+            { _id: producto._id, tienda: tienda._id, catalogo: { $gte: item.cantidad } },
+            { $inc: { catalogo: -item.cantidad } },
+            { new: true, session }
+          );
+
+      if (!descontado) {
+        await session.abortTransaction();
         return res.status(400).json({
           message: `No hay stock suficiente de "${producto.nombre}"`,
           codigo: 'SIN_STOCK',
@@ -128,12 +165,13 @@ export const crearPedidoPublico = async (req, res, next) => {
         precio,
         talle: item.talle || '',
         color: item.color || '',
+        conVariante,
         subtotal,
       });
     }
 
     const numero = await siguienteNumeroPedido(tienda._id);
-    const pedido = await Pedido.create({
+    const [pedido] = await Pedido.create([{
       tienda: tienda._id,
       numero,
       cliente: data.cliente,
@@ -141,7 +179,9 @@ export const crearPedidoPublico = async (req, res, next) => {
       total,
       metodoPago: data.metodoPago,
       historial: [{ estado: 'pendiente', usuario: 'catálogo' }],
-    });
+    }], { session });
+
+    await session.commitTransaction();
 
     const resumen = items
       .map((item) => {
@@ -168,6 +208,9 @@ export const crearPedidoPublico = async (req, res, next) => {
 
     res.status(201).json({ pedido, whatsapp });
   } catch (error) {
+    await session.abortTransaction().catch(() => {});
     next(error);
+  } finally {
+    session.endSession();
   }
 };

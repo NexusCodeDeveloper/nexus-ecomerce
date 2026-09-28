@@ -1,4 +1,5 @@
 import Pedido from './PedidoModel.js';
+import Producto from '../Producto/ProductoModel.js';
 import { schemaEstadoPedido } from './PedidoSchema.js';
 import { filtroTienda } from '../../utils/TenantUtils.js';
 import { obtenerRango } from '../../utils/FechasUtils.js';
@@ -24,18 +25,34 @@ export const cambiarEstadoPedido = async (req, res, next) => {
   try {
     const { estado } = schemaEstadoPedido.parse(req.body);
 
-    const pedido = await Pedido.findOneAndUpdate(
-      filtroTienda(req, { _id: req.params.id }),
-      {
-        $set: { estado },
-        $push: { historial: { estado, usuario: req.usuario?.nombre || '' } },
-      },
-      { new: true }
-    );
-
+    const pedido = await Pedido.findOne(filtroTienda(req, { _id: req.params.id }));
     if (!pedido) {
       return res.status(404).json({ message: 'Pedido no encontrado' });
     }
+
+    if (estado === 'cancelado' && pedido.estado !== 'cancelado' && pedido.stockDescontado) {
+      for (const item of pedido.items) {
+        if (item.conVariante) {
+          await Producto.updateOne(
+            filtroTienda(req, {
+              _id: item.producto,
+              variantes: { $elemMatch: { talle: item.talle || '', color: item.color || '' } },
+            }),
+            { $inc: { 'variantes.$.catalogo': item.cantidad, catalogo: item.cantidad } }
+          );
+        } else {
+          await Producto.updateOne(
+            filtroTienda(req, { _id: item.producto }),
+            { $inc: { catalogo: item.cantidad } }
+          );
+        }
+      }
+      pedido.stockDescontado = false;
+    }
+
+    pedido.estado = estado;
+    pedido.historial.push({ estado, usuario: req.usuario?.nombre || '' });
+    await pedido.save();
 
     res.json(pedido);
   } catch (error) {
