@@ -24,9 +24,10 @@ describe('utilidades del catalogo', () => {
 
   it('calcula el disponible segun variante', () => {
     const producto = { cantidad: 3, variantes: [{ talle: 'M', color: 'Rojo', cantidad: 2 }] };
-    expect(disponibleDe(producto)).toBe(3);
+    expect(disponibleDe(producto)).toBe(0);
     expect(disponibleDe(producto, 'M', 'Rojo')).toBe(2);
     expect(disponibleDe(producto, 'L', 'Rojo')).toBe(0);
+    expect(disponibleDe({ cantidad: 3 })).toBe(3);
   });
 
   it('lista solo variantes con stock', () => {
