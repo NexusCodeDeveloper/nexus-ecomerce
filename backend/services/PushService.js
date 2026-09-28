@@ -77,6 +77,7 @@ export const registrarSuscripcion = async ({ endpoint, keys }, usuario) => {
         nombre: usuario.nombre || '',
         usuarioId: usuario.id || null,
         rol: usuario.rol || 'user',
+        tienda: usuario.tienda || null,
         actualizadoAt: new Date(),
       },
     },
@@ -84,16 +85,20 @@ export const registrarSuscripcion = async ({ endpoint, keys }, usuario) => {
   );
 };
 
-export const eliminarSuscripcion = async (endpoint, usuarioId) => {
+export const eliminarSuscripcion = async (endpoint, usuarioId, tienda) => {
   if (!endpoint || !usuarioId) return;
-  await SuscripcionPush.deleteOne({ endpoint, usuarioId });
+  const filtro = { endpoint, usuarioId };
+  if (tienda) filtro.tienda = tienda;
+  await SuscripcionPush.deleteOne(filtro);
 };
 
-export const construirFiltro = (para) => {
-  if (para === 'admins') return { rol: 'admin' };
-  if (para === 'empleados') return { rol: 'user' };
-  if (para?.usuarioId) return { usuarioId: para.usuarioId };
-  return {};
+export const construirFiltro = (para, tienda) => {
+  const filtro = {};
+  if (tienda) filtro.tienda = tienda;
+  if (para === 'admins') filtro.rol = 'admin';
+  else if (para === 'empleados') filtro.rol = 'user';
+  else if (para?.usuarioId) filtro.usuarioId = para.usuarioId;
+  return filtro;
 };
 
 export const limpiarSuscripcionesHuerfanas = async () => {
@@ -107,10 +112,10 @@ export const limpiarSuscripcionesHuerfanas = async () => {
   return eliminar.length;
 };
 
-const ejecutarEnvio = async ({ tipo, titulo, mensaje, url = '/', para = 'todos' }) => {
+const ejecutarEnvio = async ({ tipo, titulo, mensaje, url = '/', para = 'todos', tienda }) => {
   if (!pushActivo) return;
   try {
-    const subs = await SuscripcionPush.find(construirFiltro(para));
+    const subs = await SuscripcionPush.find(construirFiltro(para, tienda));
     if (subs.length === 0) return;
 
     const payload = JSON.stringify({
@@ -171,7 +176,7 @@ export const enviarEvento = (opciones) => {
   return tarea;
 };
 
-export const enviarStockBajo = async (productos = []) => {
+export const enviarStockBajo = async (productos = [], tienda) => {
   if (!pushActivo || productos.length === 0) return;
   const stockDe = (p) =>
     p.variantes?.length > 0 ? p.variantes.reduce((s, v) => s + v.cantidad, 0) : p.cantidad;
@@ -190,5 +195,6 @@ export const enviarStockBajo = async (productos = []) => {
       .join(' · '),
     url: '/products',
     para: 'admins',
+    tienda,
   });
 };

@@ -19,7 +19,7 @@ export const desuscribir = async (req, res, next) => {
     if (!endpoint) {
       return res.status(400).json({ message: 'Endpoint requerido' });
     }
-    await eliminarSuscripcion(endpoint, req.usuario.id);
+    await eliminarSuscripcion(endpoint, req.usuario.id, req.usuario.tienda);
     res.json({ ok: true });
   } catch (error) {
     next(error);
