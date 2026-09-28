@@ -7,6 +7,7 @@ import { indiceDeVariante, encontrarVariante, depositoDe } from '../../utils/Var
 import { obtenerArticulos, mismaLinea, prorratearPagos, totalEfectivoDePagos, esMismoDia } from '../../utils/VentasUtils.js';
 import { mensajeCierre, verificarOperacionNoEnCierre, MENSAJE_CIERRE_EN_CURSO } from '../../utils/CierresUtils.js';
 import { buscarCajaAbierta, cajaEsDeHoy, mensajeCajaAnterior } from '../../utils/CajaUtils.js';
+import { conTienda } from '../../utils/TenantUtils.js';
 
 const redondear = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -81,8 +82,8 @@ export const aplicarDevolucionAlTicket = (venta, linea, cantidad, motivo) => {
   };
 };
 
-const verificarCajaAbierta = async (session, offset, contexto) => {
-  const caja = await buscarCajaAbierta(session);
+const verificarCajaAbierta = async (session, offset, contexto, tienda = null) => {
+  const caja = await buscarCajaAbierta(session, tienda);
   if (!caja) {
     throw errorDeServicio(409, `Antes de ${contexto} tenés que abrir la caja`, 'SIN_CAJA');
   }
@@ -96,10 +97,11 @@ export const ejecutarDevolucion = async (data, usuario) => {
   try {
     session.startTransaction();
     const offset = Number(data.offset) || 0;
+    const tienda = usuario?.tienda || null;
 
-    await verificarCajaAbierta(session, offset, 'registrar una devolución');
+    await verificarCajaAbierta(session, offset, 'registrar una devolución', tienda);
 
-    const product = await Producto.findById(data.producto).session(session);
+    const product = await Producto.findOne(conTienda(tienda, { _id: data.producto })).session(session);
     if (!product) throw errorDeServicio(404, 'Producto no encontrado');
 
     if (product.variantes?.length > 0) {
@@ -115,7 +117,7 @@ export const ejecutarDevolucion = async (data, usuario) => {
 
     let sale = null;
     if (data.venta) {
-      sale = await Venta.findById(data.venta).session(session);
+      sale = await Venta.findOne(conTienda(tienda, { _id: data.venta })).session(session);
       if (!sale) throw errorDeServicio(400, 'El ticket no existe o ya fue devuelto');
       if (sale.estado === 'devuelta') throw errorDeServicio(400, 'El ticket ya fue devuelto');
       materializarItems(sale);
@@ -157,6 +159,7 @@ export const ejecutarDevolucion = async (data, usuario) => {
 
     const returnRecord = await Devolucion.create([{
       ...data,
+      ...(tienda ? { tienda } : {}),
       venta: data.venta || null,
       diferencia: 0,
       montoDevuelto: montoTotalDevuelto,
@@ -188,16 +191,17 @@ export const ejecutarCambio = async (data, usuario) => {
   try {
     session.startTransaction();
     const offset = Number(data.offset) || 0;
+    const tienda = usuario?.tienda || null;
 
-    await verificarCajaAbierta(session, offset, 'hacer un cambio');
+    await verificarCajaAbierta(session, offset, 'hacer un cambio', tienda);
 
     const mismoProducto = String(data.productoDevolver) === String(data.productoCargar);
-    const productoDevuelto = await Producto.findById(data.productoDevolver).session(session);
+    const productoDevuelto = await Producto.findOne(conTienda(tienda, { _id: data.productoDevolver })).session(session);
     if (!productoDevuelto) throw errorDeServicio(404, 'Producto a devolver no encontrado');
 
     const productoCargado = mismoProducto
       ? productoDevuelto
-      : await Producto.findById(data.productoCargar).session(session);
+      : await Producto.findOne(conTienda(tienda, { _id: data.productoCargar })).session(session);
     if (!productoCargado) throw errorDeServicio(404, 'Producto a cargar no encontrado');
 
     const normalizarVariante = (v) => String(v ?? '').trim().toLowerCase();
@@ -238,7 +242,7 @@ export const ejecutarCambio = async (data, usuario) => {
 
     let saleTicket = null;
     if (data.venta) {
-      saleTicket = await Venta.findById(data.venta).session(session);
+      saleTicket = await Venta.findOne(conTienda(tienda, { _id: data.venta })).session(session);
       if (!saleTicket) throw errorDeServicio(400, 'El ticket no existe o ya fue devuelto');
       if (saleTicket.estado === 'devuelta') throw errorDeServicio(400, 'El ticket ya fue devuelto');
       materializarItems(saleTicket);
@@ -333,6 +337,7 @@ export const ejecutarCambio = async (data, usuario) => {
         }
       }
       ventaDiferencia = await Venta.create([{
+        ...(tienda ? { tienda } : {}),
         articulos: [{
           producto: data.productoCargar,
           cantidad: data.cantidadCargar,
@@ -350,6 +355,7 @@ export const ejecutarCambio = async (data, usuario) => {
     } else {
       const pagoDiferencia = Math.max(0, diferencia);
       ventaDiferencia = await Venta.create([{
+        ...(tienda ? { tienda } : {}),
         articulos: [{
           producto: data.productoCargar,
           cantidad: data.cantidadCargar,
@@ -370,6 +376,7 @@ export const ejecutarCambio = async (data, usuario) => {
     }
 
     await Devolucion.create([{
+      ...(tienda ? { tienda } : {}),
       producto: data.productoDevolver,
       cantidad: data.cantidadDevolver,
       talle: data.talleDevolver || '',
@@ -406,14 +413,15 @@ export const ejecutarCambio = async (data, usuario) => {
   }
 };
 
-export const revertirDevolucion = async (id) => {
+export const revertirDevolucion = async (id, usuario = null) => {
   const session = await mongoose.startSession();
   try {
     session.startTransaction();
-    const returnRecord = await Devolucion.findById(id).session(session);
+    const tienda = usuario?.tienda || null;
+    const returnRecord = await Devolucion.findOne(conTienda(tienda, { _id: id })).session(session);
     if (!returnRecord) throw errorDeServicio(404, 'Devolución no encontrada');
 
-    const verificacion = await verificarOperacionNoEnCierre(returnRecord.fechaCreacion, session);
+    const verificacion = await verificarOperacionNoEnCierre(returnRecord.fechaCreacion, session, tienda);
     if (verificacion.bloqueado) {
       throw errorDeServicio(
         409,
@@ -426,7 +434,7 @@ export const revertirDevolucion = async (id) => {
     const mismoProducto = returnRecord.productoCargar
       && String(returnRecord.productoCargar) === String(returnRecord.producto);
 
-    const product = await Producto.findById(returnRecord.producto).session(session);
+    const product = await Producto.findOne(conTienda(tienda, { _id: returnRecord.producto })).session(session);
     if (product) {
       if (product.variantes?.length > 0) {
         const idx = indiceDeVariante(product, returnRecord.talle, returnRecord.color);
@@ -459,7 +467,7 @@ export const revertirDevolucion = async (id) => {
     if (returnRecord.productoCargar) {
       const productoCargado = mismoProducto
         ? product
-        : await Producto.findById(returnRecord.productoCargar).session(session);
+        : await Producto.findOne(conTienda(tienda, { _id: returnRecord.productoCargar })).session(session);
       if (productoCargado) {
         if (productoCargado.variantes?.length > 0) {
           const idx = indiceDeVariante(productoCargado, returnRecord.talleCargar, returnRecord.colorCargar);
@@ -480,7 +488,7 @@ export const revertirDevolucion = async (id) => {
     }
 
     if (returnRecord.venta) {
-      const venta = await Venta.findById(returnRecord.venta).session(session);
+      const venta = await Venta.findOne(conTienda(tienda, { _id: returnRecord.venta })).session(session);
       if (venta) {
         const eraDevuelta = venta.estado === 'devuelta';
         const articulos = (venta.articulos && venta.articulos.length > 0)
@@ -540,13 +548,13 @@ export const revertirDevolucion = async (id) => {
     }
 
     if (returnRecord.ventaDiferenciaId) {
-      const ventaDiferencia = await Venta.findById(returnRecord.ventaDiferenciaId).session(session);
+      const ventaDiferencia = await Venta.findOne(conTienda(tienda, { _id: returnRecord.ventaDiferenciaId })).session(session);
       if (ventaDiferencia) {
-        await Venta.findByIdAndDelete(returnRecord.ventaDiferenciaId).session(session);
+        await Venta.findOneAndDelete(conTienda(tienda, { _id: returnRecord.ventaDiferenciaId })).session(session);
       }
     }
 
-    await Devolucion.findByIdAndDelete(id).session(session);
+    await Devolucion.findOneAndDelete(conTienda(tienda, { _id: id })).session(session);
     await session.commitTransaction();
     return returnRecord;
   } catch (error) {

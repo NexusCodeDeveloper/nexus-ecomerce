@@ -14,10 +14,10 @@ const generarCodigoAleatorio = () => {
   return `${TICKET_PREFIJO}${codigo}`;
 };
 
-export const generarTicketNumero = async () => {
+export const generarTicketNumero = async (tienda = null) => {
   for (let intento = 0; intento < TICKET_INTENTOS; intento += 1) {
     const codigo = generarCodigoAleatorio();
-    const existe = await Venta.exists({ ticketNumero: codigo });
+    const existe = await Venta.exists(tienda ? { ticketNumero: codigo, tienda } : { ticketNumero: codigo });
     if (!existe) return codigo;
   }
   throw new Error('No se pudo generar un número de ticket único');
@@ -25,7 +25,7 @@ export const generarTicketNumero = async () => {
 
 export const guardarConTicketUnico = async (venta, session) => {
   if (!venta.ticketNumero) {
-    venta.ticketNumero = await generarTicketNumero();
+    venta.ticketNumero = await generarTicketNumero(venta.tienda || null);
   }
   return await venta.save({ session });
 };
