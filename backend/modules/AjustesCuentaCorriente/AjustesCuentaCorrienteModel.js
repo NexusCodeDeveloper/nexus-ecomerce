@@ -35,7 +35,6 @@ const ajustesSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Tienda',
       required: true,
-      unique: true,
     },
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' } }
