@@ -22,7 +22,6 @@ const movementSchema = new mongoose.Schema(
     tienda: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Tienda',
-      required: true,
       index: true,
     },
     tipo: {
