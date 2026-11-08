@@ -5,11 +5,15 @@ import CuotaCuentaCorriente from '../CuotaCuentaCorriente/CuotaCuentaCorrienteMo
 import { schemaCrearCliente, schemaActualizarCliente } from './ClienteSchema.js';
 import { calcularSaldosPorCliente, calcularSaldosDeCliente } from '../../utils/CuentaCorrienteUtils.js';
 import { hoyEnUtc } from '../CuotaCuentaCorriente/CuotasService.js';
+import { filtroTienda, datosTienda, idTienda } from '../../utils/TenantUtils.js';
 
 const escaparRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const encontrarDuplicado = (nombre, excluirId) => {
-  const filter = { nombre: { $regex: `^${escaparRegex(nombre.trim())}$`, $options: 'i' } };
+const encontrarDuplicado = (nombre, excluirId, tienda) => {
+  const filter = {
+    nombre: { $regex: `^${escaparRegex(nombre.trim())}$`, $options: 'i' },
+    ...(tienda ? { tienda } : {}),
+  };
   if (excluirId) filter._id = { $ne: excluirId };
   return Cliente.findOne(filter);
 };
@@ -41,7 +45,7 @@ const conSaldo = (cliente, resumen, cuotasVencidas = 0) => ({
 export const obtenerClientes = async (req, res, next) => {
   try {
     const { buscar, limit = 50, offset = 0 } = req.query;
-    const filter = {};
+    const filter = { ...filtroTienda(req) };
 
     if (buscar) {
       const seguro = escaparRegex(String(buscar).trim());
@@ -79,7 +83,7 @@ export const obtenerCliente = async (req, res, next) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ message: 'Cliente inválido' });
     }
-    const cliente = await Cliente.findById(req.params.id);
+    const cliente = await Cliente.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!cliente) {
       return res.status(404).json({ message: 'Cliente no encontrado' });
     }
@@ -94,11 +98,12 @@ export const obtenerCliente = async (req, res, next) => {
 export const crearCliente = async (req, res, next) => {
   try {
     const data = schemaCrearCliente.parse(req.body);
-    const duplicado = await encontrarDuplicado(data.nombre);
+    const tienda = idTienda(req);
+    const duplicado = await encontrarDuplicado(data.nombre, undefined, tienda);
     if (duplicado) {
       return res.status(409).json({ message: `Ya existe un cliente llamado "${data.nombre}"` });
     }
-    const customer = await Cliente.create(data);
+    const customer = await Cliente.create({ ...data, ...datosTienda(req) });
     res.status(201).json(conSaldo(customer, { totalDebitos: 0, totalCreditos: 0, saldo: 0 }));
   } catch (error) {
     next(error);
@@ -108,13 +113,18 @@ export const crearCliente = async (req, res, next) => {
 export const actualizarCliente = async (req, res, next) => {
   try {
     const data = schemaActualizarCliente.parse(req.body);
+    const tienda = idTienda(req);
     if (data.nombre) {
-      const duplicado = await encontrarDuplicado(data.nombre, req.params.id);
+      const duplicado = await encontrarDuplicado(data.nombre, req.params.id, tienda);
       if (duplicado) {
         return res.status(409).json({ message: `Ya existe un cliente llamado "${data.nombre}"` });
       }
     }
-    const customer = await Cliente.findByIdAndUpdate(req.params.id, data, {
+    const customer = await Cliente.findOneAndUpdate(
+      { _id: req.params.id, ...filtroTienda(req) },
+      data,
+      { new: true, runValidators: true }
+    );
       new: true,
       runValidators: true,
     });
@@ -134,11 +144,13 @@ export const eliminarCliente = async (req, res, next) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ message: 'Cliente inválido' });
     }
-    const customer = await Cliente.findById(req.params.id);
+    const customer = await Cliente.findOne({ _id: req.params.id, ...filtroTienda(req) });
     if (!customer) {
       return res.status(404).json({ message: 'Cliente no encontrado' });
     }
-    const movimientos = await MovimientoCuentaCorriente.countDocuments({ cliente: customer._id });
+    const movimientos = await MovimientoCuentaCorriente.countDocuments(
+      filtroTienda(req, { cliente: customer._id })
+    );
     if (movimientos > 0) {
       return res.status(409).json({
         message: 'No se puede eliminar, el cliente tiene movimientos en su cuenta corriente',

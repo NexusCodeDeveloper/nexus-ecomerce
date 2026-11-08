@@ -15,6 +15,7 @@ import { calcularSaldosDeCliente } from '../../utils/CuentaCorrienteUtils.js';
 import { parsearFecha, fechaHoyCliente } from '../../utils/FechasUtils.js';
 import { aCentavos, deCentavos } from '../../utils/DineroUtils.js';
 import { recalcularImputacionesCliente } from '../CuotaCuentaCorriente/CuotasService.js';
+import { filtroTienda, datosTienda } from '../../utils/TenantUtils.js';
 
 const escaparRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -63,13 +64,13 @@ const rangoDeFechas = (desde, hasta) => {
   };
 };
 
-const buscarCliente = async (clienteId) => {
+const buscarCliente = async (req, clienteId) => {
   if (!mongoose.Types.ObjectId.isValid(clienteId)) {
     const error = new Error('Cliente inválido');
     error.statusCode = 400;
     throw error;
   }
-  const cliente = await Cliente.findById(clienteId);
+  const cliente = await Cliente.findOne({ _id: clienteId, ...filtroTienda(req) });
   if (!cliente) {
     const error = new Error('Cliente no encontrado');
     error.statusCode = 404;
@@ -78,13 +79,17 @@ const buscarCliente = async (clienteId) => {
   return cliente;
 };
 
-const obtenerMovimiento = async (clienteId, movimientoId) => {
+const obtenerMovimiento = async (req, clienteId, movimientoId) => {
   if (!mongoose.Types.ObjectId.isValid(movimientoId)) {
     const error = new Error('Movimiento inválido');
     error.statusCode = 400;
     throw error;
   }
-  const movimiento = await MovimientoCuentaCorriente.findOne({ _id: movimientoId, cliente: clienteId });
+  const movimiento = await MovimientoCuentaCorriente.findOne({
+    _id: movimientoId,
+    cliente: clienteId,
+    ...filtroTienda(req),
+  });
   if (!movimiento) {
     const error = new Error('Movimiento no encontrado');
     error.statusCode = 404;
@@ -105,9 +110,9 @@ export const obtenerMovimientos = async (req, res, next) => {
   try {
     const { clienteId } = req.params;
     const { tipo, origen, estado, formaPago, desde, hasta, buscar, limit = 100, offset = 0 } = req.query;
-    await buscarCliente(clienteId);
+    await buscarCliente(req, clienteId);
 
-    const filter = { cliente: clienteId };
+    const filter = { cliente: clienteId, ...filtroTienda(req) };
 
     if (tipo) {
       if (!TIPOS_MOVIMIENTO.includes(tipo)) {
@@ -165,7 +170,7 @@ export const crearMovimiento = async (req, res, next) => {
   try {
     const clienteId = req.params.clienteId || req.body?.cliente;
     const data = schemaCrearMovimiento.parse(req.body);
-    const cliente = await buscarCliente(clienteId);
+    const cliente = await buscarCliente(req, clienteId);
 
     if (data.origen === 'pago') {
       const { saldo } = await calcularSaldosDeCliente(cliente._id);
@@ -184,6 +189,7 @@ export const crearMovimiento = async (req, res, next) => {
       nota: data.nota,
       estado: 'activo',
       registradoPor: req.usuario?.nombre || '',
+      ...datosTienda(req),
     });
 
     let imputaciones = [];
@@ -199,7 +205,7 @@ export const crearMovimiento = async (req, res, next) => {
 
 export const actualizarMovimiento = async (req, res, next) => {
   try {
-    await buscarCliente(req.params.clienteId);
+    await buscarCliente(req, req.params.clienteId);
     const data = schemaActualizarMovimiento.parse(req.body);
     const movimiento = await obtenerMovimiento(req.params.clienteId, req.params.movimientoId);
     exigirActivo(movimiento);
@@ -250,7 +256,7 @@ export const actualizarMovimiento = async (req, res, next) => {
 /** Nunca se borra: la anulacion queda registrada con motivo, responsable y momento. */
 export const anularMovimiento = async (req, res, next) => {
   try {
-    await buscarCliente(req.params.clienteId);
+    await buscarCliente(req, req.params.clienteId);
     const data = schemaAnularMovimiento.parse(req.body);
     const movimiento = await obtenerMovimiento(req.params.clienteId, req.params.movimientoId);
     exigirActivo(movimiento);
@@ -278,7 +284,7 @@ export const anularMovimiento = async (req, res, next) => {
 
 export const obtenerSaldo = async (req, res, next) => {
   try {
-    const cliente = await buscarCliente(req.params.clienteId);
+    const cliente = await buscarCliente(req, req.params.clienteId);
     const resumen = await calcularSaldosDeCliente(cliente._id);
     res.json({ cliente: cliente._id, clienteNombre: cliente.nombre, ...resumen });
   } catch (error) {

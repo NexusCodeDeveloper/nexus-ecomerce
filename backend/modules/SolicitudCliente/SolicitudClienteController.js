@@ -6,11 +6,15 @@ import Notificacion from '../Notificacion/NotificacionModel.js';
 import { enviarEvento } from '../../services/PushService.js';
 import { enSegundoPlano } from '../../utils/TareasUtils.js';
 import logger from '../../utils/LoggerUtils.js';
+import { filtroTienda, datosTienda } from '../../utils/TenantUtils.js';
 
 const escaparRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const nombreDuplicado = async (nombre, excluirSolicitudId) => {
-  const filter = { nombre: { $regex: `^${escaparRegex(nombre.trim())}$`, $options: 'i' } };
+const nombreDuplicado = async (nombre, excluirSolicitudId, tienda) => {
+  const filter = {
+    nombre: { $regex: `^${escaparRegex(nombre.trim())}$`, $options: 'i' },
+    ...(tienda ? { tienda } : {}),
+  };
   if (excluirSolicitudId) filter._id = { $ne: excluirSolicitudId };
   return Cliente.findOne(filter);
 };
@@ -18,7 +22,7 @@ const nombreDuplicado = async (nombre, excluirSolicitudId) => {
 /** Cantidad de altas esperando revision del admin. Solo un numero, para el cartelito del menu. */
 export const contarSolicitudesPendientes = async (req, res, next) => {
   try {
-    const total = await SolicitudCliente.countDocuments({ estado: 'pendiente' });
+    const total = await SolicitudCliente.countDocuments({ estado: 'pendiente', ...filtroTienda(req) });
     res.json({ total });
   } catch (error) {
     next(error);
@@ -42,6 +46,7 @@ const avisarSolicitudPendiente = async (solicitud) => {
       nuevaParaAdmin: true,
       soloAdmin: true,
       solicitud: solicitud._id,
+      ...(solicitud.tienda ? { tienda: solicitud.tienda } : {}),
     });
 
     enSegundoPlano(
@@ -68,11 +73,15 @@ const avisarSolicitudPendiente = async (solicitud) => {
 };
 
 /** Al resolver el alta, el aviso se cierra solo dejando claro si fue aprobada o rechazada. */
-const cerrarAvisoDeSolicitud = async (solicitudId, usuario, comentario) => {
-  if (!solicitudId) return;
+const cerrarAvisoDeSolicitud = async (solicitud, usuario, comentario) => {
+  if (!solicitud) return;
   try {
     await Notificacion.updateMany(
-      { solicitud: solicitudId, estado: { $ne: 'realizado' } },
+      {
+        solicitud: solicitud._id,
+        estado: { $ne: 'realizado' },
+        ...(solicitud.tienda ? { tienda: solicitud.tienda } : {}),
+      },
       {
         $set: {
           estado: 'realizado',
@@ -99,7 +108,7 @@ const cerrarAvisoDeSolicitud = async (solicitudId, usuario, comentario) => {
 export const obtenerSolicitudes = async (req, res, next) => {
   try {
     const { estado, limit = 50, offset = 0 } = req.query;
-    const filter = {};
+    const filter = { ...filtroTienda(req) };
 
     if (estado) {
       if (!ESTADOS_SOLICITUD.includes(estado)) {
@@ -125,9 +134,11 @@ export const obtenerSolicitudes = async (req, res, next) => {
 export const crearSolicitud = async (req, res, next) => {
   try {
     const data = schemaCrearSolicitud.parse(req.body);
+    const tiendaReq = { ...filtroTienda(req) };
     const pendiente = await SolicitudCliente.findOne({
       solicitante: req.usuario?.id,
       estado: 'pendiente',
+      ...tiendaReq,
       'datos.nombre': { $regex: `^${escaparRegex(data.datos.nombre)}$`, $options: 'i' },
     });
     if (pendiente) {
@@ -139,6 +150,7 @@ export const crearSolicitud = async (req, res, next) => {
       estado: 'pendiente',
       solicitante: req.usuario?.id,
       solicitanteNombre: req.usuario?.nombre || '',
+      ...tiendaReq,
     });
 
     await avisarSolicitudPendiente(request);
@@ -155,14 +167,15 @@ export const aprobarSolicitud = async (req, res, next) => {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
       return res.status(400).json({ message: 'Solicitud inválida' });
     }
-    const solicitud = await SolicitudCliente.findById(req.params.id);
+    const tiendaReq = { ...filtroTienda(req) };
+    const solicitud = await SolicitudCliente.findOne({ _id: req.params.id, ...tiendaReq });
     if (!solicitud) {
       return res.status(404).json({ message: 'Solicitud no encontrada' });
     }
     if (solicitud.estado !== 'pendiente') {
       return res.status(409).json({ message: 'La solicitud ya fue revisada' });
     }
-    const duplicado = await nombreDuplicado(solicitud.datos.nombre);
+    const duplicado = await nombreDuplicado(solicitud.datos.nombre, undefined, tiendaReq.tienda);
     if (duplicado) {
       return res.status(409).json({
         message: `Ya existe un cliente llamado "${solicitud.datos.nombre}"`,
@@ -170,7 +183,7 @@ export const aprobarSolicitud = async (req, res, next) => {
       });
     }
 
-    const cliente = await Cliente.create(solicitud.datos.toObject());
+    const cliente = await Cliente.create({ ...solicitud.datos.toObject(), ...tiendaReq });
     solicitud.estado = 'aprobada';
     solicitud.cliente = cliente._id;
     solicitud.revisadoPor = req.usuario?.id;
@@ -178,7 +191,7 @@ export const aprobarSolicitud = async (req, res, next) => {
     solicitud.revisadoEn = new Date();
     await solicitud.save();
 
-    await cerrarAvisoDeSolicitud(solicitud._id, req.usuario, 'Solicitud aprobada');
+    await cerrarAvisoDeSolicitud(solicitud, req.usuario, 'Solicitud aprobada');
 
     res.json(solicitud);
   } catch (error) {
@@ -192,7 +205,8 @@ export const rechazarSolicitud = async (req, res, next) => {
       return res.status(400).json({ message: 'Solicitud inválida' });
     }
     const data = schemaRechazarSolicitud.parse(req.body);
-    const solicitud = await SolicitudCliente.findById(req.params.id);
+    const tiendaReq = { ...filtroTienda(req) };
+    const solicitud = await SolicitudCliente.findOne({ _id: req.params.id, ...tiendaReq });
     if (!solicitud) {
       return res.status(404).json({ message: 'Solicitud no encontrada' });
     }
@@ -208,7 +222,7 @@ export const rechazarSolicitud = async (req, res, next) => {
     await solicitud.save();
 
     await cerrarAvisoDeSolicitud(
-      solicitud._id,
+      solicitud,
       req.usuario,
       data.motivo ? `Solicitud rechazada: ${data.motivo}` : 'Solicitud rechazada'
     );

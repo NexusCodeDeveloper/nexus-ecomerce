@@ -2,11 +2,17 @@ import Promocion from './PromocionModel.js';
 import Producto from '../Producto/ProductoModel.js';
 
 /** Promociones vigentes ahora: activas y dentro del rango de fechas. */
-export const promocionesVigentes = (ahora = new Date(), session = null) =>
-  Promocion.find({ activa: true, desde: { $lte: ahora }, hasta: { $gte: ahora } }).session(session);
+export const promocionesVigentes = (ahora = new Date(), tienda = null, session = null) =>
+  Promocion.find({ ...(tienda ? { tienda } : {}), activa: true, desde: { $lte: ahora }, hasta: { $gte: ahora } })
+    .session(session);
 
-const promocionesSolapadas = (desde, hasta, session = null) =>
-  Promocion.find({ activa: true, desde: { $lt: hasta }, hasta: { $gt: desde } }).session(session);
+const promocionesSolapadas = (desde, hasta, tienda = null, session = null) =>
+  Promocion.find({
+    ...(tienda ? { tienda } : {}),
+    activa: true,
+    desde: { $lt: hasta },
+    hasta: { $gt: desde },
+  }).session(session);
 
 const formatearRango = (promo) => {
   const opciones = { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' };
@@ -30,8 +36,8 @@ const listarNombres = (nombres) => {
  * No se permiten promociones superpuestas en el tiempo sobre los mismos productos.
  * Sí se permiten promociones secuenciales (una empieza cuando la otra termina).
  */
-export const verificarSuperposicion = async ({ desde, hasta, todos, productos }, session = null) => {
-  const candidatas = await promocionesSolapadas(desde, hasta, session);
+export const verificarSuperposicion = async ({ desde, hasta, todos, productos, tienda }, session = null) => {
+  const candidatas = await promocionesSolapadas(desde, hasta, tienda, session);
   if (candidatas.length === 0) return;
 
   const idsNuevos = (productos || []).map(String);

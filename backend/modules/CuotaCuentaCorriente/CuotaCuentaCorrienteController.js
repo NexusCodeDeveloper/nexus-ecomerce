@@ -4,14 +4,15 @@ import Cliente from '../Cliente/ClienteModel.js';
 import { obtenerAjustes } from '../AjustesCuentaCorriente/AjustesCuentaCorrienteService.js';
 import { revisarCuotas, saldoPendienteDeCuota, esCuotaVencida, hoyEnUtc } from './CuotasService.js';
 import { deCentavos } from '../../utils/DineroUtils.js';
+import { filtroTienda } from '../../utils/TenantUtils.js';
 
-const buscarCliente = async (clienteId) => {
+const buscarCliente = async (req, clienteId) => {
   if (!mongoose.Types.ObjectId.isValid(clienteId)) {
     const error = new Error('Cliente inválido');
     error.statusCode = 400;
     throw error;
   }
-  const cliente = await Cliente.findById(clienteId);
+  const cliente = await Cliente.findOne({ _id: clienteId, ...filtroTienda(req) });
   if (!cliente) {
     const error = new Error('Cliente no encontrado');
     error.statusCode = 404;
@@ -23,10 +24,10 @@ const buscarCliente = async (clienteId) => {
 export const obtenerCuotasDeCliente = async (req, res, next) => {
   try {
     const { clienteId } = req.params;
-    await buscarCliente(clienteId);
+    await buscarCliente(req, clienteId);
     const { estado } = req.query;
 
-    const filtro = { cliente: clienteId };
+    const filtro = { cliente: clienteId, ...filtroTienda(req) };
     if (estado) {
       const estados = String(estado).split(',').map((e) => e.trim()).filter(Boolean);
       if (estados.some((e) => !ESTADOS_CUOTA.includes(e))) {
@@ -55,18 +56,17 @@ export const obtenerResumenCuotas = async (req, res, next) => {
     const dias = Math.max(Number(ajustes.diasAvisoVencimiento) || 0, 0);
     const limite = new Date(hoy.getTime() + dias * 86400000);
 
+    const filtroTiendaReq = { ...filtroTienda(req) };
+    const filtroEstado = { estado: { $in: ['pendiente', 'parcial'] }, ...filtroTiendaReq };
     const [vencidas, porVencer, pendientes, agregado] = await Promise.all([
+      CuotaCuentaCorriente.countDocuments({ ...filtroEstado, fechaVencimiento: { $lt: hoy } }),
       CuotaCuentaCorriente.countDocuments({
-        estado: { $in: ['pendiente', 'parcial'] },
-        fechaVencimiento: { $lt: hoy },
-      }),
-      CuotaCuentaCorriente.countDocuments({
-        estado: { $in: ['pendiente', 'parcial'] },
+        ...filtroEstado,
         fechaVencimiento: { $gte: hoy, $lte: limite },
       }),
-      CuotaCuentaCorriente.countDocuments({ estado: { $in: ['pendiente', 'parcial'] } }),
+      CuotaCuentaCorriente.countDocuments(filtroEstado),
       CuotaCuentaCorriente.aggregate([
-        { $match: { estado: { $in: ['pendiente', 'parcial'] } } },
+        { $match: filtroEstado },
         {
           $group: {
             _id: null,
