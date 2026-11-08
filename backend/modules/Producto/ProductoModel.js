@@ -103,7 +103,7 @@ productSchema.pre('save', function (next) {
 
 productSchema.index({ nombre: 'text' });
 productSchema.index({ tienda: 1, categoria: 1 });
-productSchema.index({ tienda: 1, codigo: 1 }, { unique: true, partialFilterExpression: { codigo: { $type: 'string' } } });
+productSchema.index({ tienda: 1, codigo: 1 }, { unique: true, sparse: true });
 productSchema.index({ nombre: 1, _id: 1 });
 productSchema.index({ categoria: 1 });
 productSchema.index({ enPapelera: 1, nombre: 1 });
