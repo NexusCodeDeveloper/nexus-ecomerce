@@ -57,11 +57,16 @@ const requestSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Cliente',
     },
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+      index: true,
+    },
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' } }
 );
 
-requestSchema.index({ estado: 1, fechaCreacion: -1 });
-requestSchema.index({ solicitante: 1, estado: 1 });
+requestSchema.index({ tienda: 1, estado: 1, fechaCreacion: -1 });
+requestSchema.index({ tienda: 1, solicitante: 1, estado: 1 });
 
 export default mongoose.model('SolicitudCliente', requestSchema, 'solicitudesCliente');

@@ -29,10 +29,16 @@ const clientSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+      index: true,
+    },
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' } }
 );
 
-clientSchema.index({ documento: 1 });
+clientSchema.index({ tienda: 1, documento: 1 });
+clientSchema.index({ tienda: 1, nombre: 1 }, { unique: true, partialFilterExpression: { nombre: { $type: 'string' } } });
 
 export default mongoose.model('Cliente', clientSchema, 'clientes');

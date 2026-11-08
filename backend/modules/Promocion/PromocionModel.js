@@ -46,11 +46,16 @@ const promocionSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+      index: true,
+    },
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' }, toJSON: { getters: true } }
 );
 
-promocionSchema.index({ activa: 1, desde: 1, hasta: 1 });
-promocionSchema.index({ productos: 1 });
+promocionSchema.index({ tienda: 1, activa: 1, desde: 1, hasta: 1 });
+promocionSchema.index({ tienda: 1, productos: 1 });
 
 export default mongoose.model('Promocion', promocionSchema, 'promociones');
