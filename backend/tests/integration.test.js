@@ -6,11 +6,11 @@ import { startTestDB, stopTestDB, clearDB, runHandler } from './helpers/db.js';
 import Producto from '../modules/Producto/ProductoModel.js';
 import MovimientoStock from '../modules/MovimientoStock/MovimientoStockModel.js';
 import Venta from '../modules/Venta/VentaModel.js';
-import { crearVenta, eliminarVenta, abrirCaja, cerrarCaja, reabrirCaja, obtenerCajaAbierta, obtenerCierresCaja, migrarArticulosVenta, eliminarCierreCaja, reenviarMailCierre } from '../modules/Venta/VentaController.js';
+import { crearVenta, eliminarVenta, abrirCaja, cerrarCaja, obtenerCajaAbierta, obtenerCierresCaja, migrarArticulosVenta, eliminarCierreCaja, reenviarMailCierre, reenviarReporteDia, asegurarSnapshotArticulos } from '../modules/Venta/VentaController.js';
 import CierreCaja from '../modules/Venta/CierreCajaModel.js';
 import { crearDevolucion, eliminarDevolucion } from '../modules/Devolucion/DevolucionController.js';
 import Devolucion from '../modules/Devolucion/DevolucionModel.js';
-import { actualizarProducto, intercambiarProducto, pasarAlSalon, obtenerCategorias, obtenerProductos, crearProducto as crearProductoController } from '../modules/Producto/ProductoController.js';
+import { actualizarProducto, intercambiarProducto, pasarAlSalon, obtenerCategorias, obtenerProductos, crearProducto as crearProductoController, obtenerProductoPorCodigo, migrarCodigosVariante, eliminarProducto as eliminarProductoController, restaurarProducto, eliminarDefinitivo, agregarDeposito, obtenerProducto, obtenerEstadisticasTablero } from '../modules/Producto/ProductoController.js';
 import productoRoutes from '../modules/Producto/ProductoRoutes.js';
 import { obtenerDisponibleCaja, crearRetiroCaja, eliminarRetiroCaja } from '../modules/RetiroCaja/RetiroCajaController.js';
 import RetiroCajaDia from '../modules/RetiroCaja/RetiroCajaDiaModel.js';
@@ -192,6 +192,81 @@ test('obtenerProductos filtra por categoría exacta sin distinguir mayúsculas',
   assert.equal(res.status, 200);
   assert.equal(res.body.length, 1);
   assert.equal(res.body[0].categoria, 'Perro');
+});
+
+test('obtenerProductos pagina con offset, limit y total', async () => {
+  await Producto.create([
+    { nombre: 'A', precio: 100, cantidad: 0, categoria: 'Ropa' },
+    { nombre: 'B', precio: 100, cantidad: 0, categoria: 'Ropa' },
+    { nombre: 'C', precio: 100, cantidad: 0, categoria: 'Ropa' },
+    { nombre: 'D', precio: 100, cantidad: 0, categoria: 'Ropa' },
+    { nombre: 'E', precio: 100, cantidad: 0, categoria: 'Ropa' },
+  ]);
+
+  const pagina1 = await runHandler(obtenerProductos, { query: { offset: '0', limit: '2', conTotal: '1' } });
+  assert.equal(pagina1.status, 200);
+  assert.equal(pagina1.body.total, 5);
+  assert.deepEqual(pagina1.body.productos.map((p) => p.nombre), ['A', 'B']);
+
+  const pagina2 = await runHandler(obtenerProductos, { query: { offset: '2', limit: '2', conTotal: '1' } });
+  assert.deepEqual(pagina2.body.productos.map((p) => p.nombre), ['C', 'D']);
+  assert.equal(pagina2.body.total, 5);
+
+  const pagina3 = await runHandler(obtenerProductos, { query: { offset: '4', limit: '2', conTotal: '1' } });
+  assert.deepEqual(pagina3.body.productos.map((p) => p.nombre), ['E']);
+
+  const sinTotal = await runHandler(obtenerProductos, { query: { offset: '0', limit: '2' } });
+  assert.ok(Array.isArray(sinTotal.body), 'sin conTotal sigue devolviendo un array');
+  assert.equal(sinTotal.body.length, 2);
+});
+
+test('obtenerProductos filtra solo con depósito (variantes y producto simple)', async () => {
+  await Producto.create([
+    { nombre: 'Con variante', precio: 100, cantidad: 0, categoria: 'Ropa', variantes: [{ talle: 'M', color: '', cantidad: 0, deposito: 3 }] },
+    { nombre: 'Variante vacía', precio: 100, cantidad: 0, categoria: 'Ropa', variantes: [{ talle: 'L', color: '', cantidad: 2, deposito: 0 }] },
+    { nombre: 'Simple con depósito', precio: 100, cantidad: 0, deposito: 4, categoria: 'Ropa' },
+    { nombre: 'Simple sin depósito', precio: 100, cantidad: 0, deposito: 0, categoria: 'Ropa' },
+  ]);
+
+  const res = await runHandler(obtenerProductos, { query: { soloDeposito: '1' } });
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.map((p) => p.nombre), ['Con variante', 'Simple con depósito']);
+});
+
+test('obtenerProductos con metricas calcula valor de depósito y stock bajo en salón', async () => {
+  await Producto.create([
+    { nombre: 'A', precio: 100, cantidad: 0, deposito: 2, stockMinimo: 2, categoria: 'Ropa' },
+    {
+      nombre: 'B',
+      precio: 50,
+      cantidad: 0,
+      stockMinimo: 2,
+      categoria: 'Ropa',
+      variantes: [
+        { talle: 'M', color: '', cantidad: 5, deposito: 1 },
+        { talle: 'L', color: '', cantidad: 5, deposito: 1 },
+      ],
+    },
+    { nombre: 'C', precio: 999, cantidad: 0, deposito: 0, stockMinimo: 2, categoria: 'Ropa' },
+  ]);
+
+  const res = await runHandler(obtenerProductos, { query: { conTotal: '1', conMetricas: '1' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.total, 3);
+  assert.equal(res.body.metricas.valorDeposito, 300, '2×100 + 2×50');
+  assert.equal(res.body.metricas.bajosSalon, 2, 'A y C tienen salón por debajo del mínimo');
+});
+
+test('obtenerProductos con soloIds devuelve solo los IDs filtrados', async () => {
+  const creados = await Producto.create([
+    { nombre: 'A', precio: 100, cantidad: 0, categoria: 'Perro' },
+    { nombre: 'B', precio: 100, cantidad: 0, categoria: 'Gato' },
+  ]);
+
+  const res = await runHandler(obtenerProductos, { query: { categoria: 'perro', soloIds: '1' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ids.length, 1);
+  assert.equal(String(res.body.ids[0]), String(creados[0]._id));
 });
 
 test('la ruta /categorias se registra antes de /:id', () => {
@@ -538,7 +613,7 @@ test('obtenerCajaAbierta devuelve null sin caja y el resumen con caja abierta', 
   assert.equal(Number(con.body.resumen.total), 0);
 });
 
-test('reabrir caja permite volver a vender y registra cada reapertura', async () => {
+test('cerrar la caja deja el día completo y bloquea volver a vender', async () => {
   await abrirCajaHoy('Juan');
   const product = await crearProducto();
   await runHandler(crearVenta, {
@@ -549,43 +624,18 @@ test('reabrir caja permite volver a vender y registra cada reapertura', async ()
 
   const estadoCerrado = await runHandler(obtenerCajaAbierta, { query: { offset: '0' } });
   assert.equal(estadoCerrado.body.caja, null);
+  assert.equal(estadoCerrado.body.diaCompleto, true, 'un cierre de día completo da el día por terminado');
+  assert.deepEqual(estadoCerrado.body.turnosCerrados, ['dia']);
   assert.ok(estadoCerrado.body.cierreHoy, 'debe informar el cierre de hoy');
   assert.equal(estadoCerrado.body.cierreHoy.cerradoPor, 'Juan');
-
-  const reabrir = await runHandler(reabrirCaja, { body: { nombre: 'Admin', offset: 0 } });
-  assert.equal(reabrir.status, 200);
-  assert.equal(reabrir.body.estado, 'abierto');
-  assert.equal(reabrir.body.reaperturas.length, 1);
-  assert.equal(reabrir.body.reaperturas[0].por, 'Admin');
 
   const venta = await runHandler(crearVenta, {
     body: { articulos: [{ producto: String(product._id), cantidad: 1 }], pagos: [{ metodo: 'efectivo', monto: 100 }] },
   });
-  assert.equal(venta.status, 201);
-
-  const cierre2 = await runHandler(cerrarCaja, { body: { nombre: 'Admin', offset: 0 } });
-  assert.equal(cierre2.status, 200);
-  assert.equal(Number(cierre2.body.total), 200);
-
-  const doc = await CierreCaja.findOne({ turno: 'dia' });
-  assert.equal(doc.reaperturas.length, 1);
-
-  const reabrir2 = await runHandler(reabrirCaja, { body: { nombre: 'Admin', offset: 0 } });
-  assert.equal(reabrir2.status, 200);
-  const doc2 = await CierreCaja.findOne({ turno: 'dia' });
-  assert.equal(doc2.reaperturas.length, 2, 'se puede reabrir más de una vez');
+  assert.equal(venta.status, 409, 'cerrada la caja no se puede vender');
 });
 
-test('reabrir caja falla sin cierre de hoy y con otra caja abierta', async () => {
-  const sinCierre = await runHandler(reabrirCaja, { body: { nombre: 'Admin', offset: 0 } });
-  assert.equal(sinCierre.status, 409);
-
-  await abrirCajaHoy();
-  const conAbierta = await runHandler(reabrirCaja, { body: { nombre: 'Admin', offset: 0 } });
-  assert.equal(conAbierta.status, 409);
-});
-
-test('una caja abierta de un día anterior bloquea vender, retirar y reabrir', async () => {
+test('una caja abierta de un día anterior bloquea vender y retirar', async () => {
   const ayer = new Date(Date.now() - 86400000);
   const fechaAyer = new Date(Date.UTC(ayer.getUTCFullYear(), ayer.getUTCMonth(), ayer.getUTCDate()));
   await CierreCaja.create({
@@ -608,9 +658,6 @@ test('una caja abierta de un día anterior bloquea vender, retirar y reabrir', a
   const retiro = await runHandler(crearRetiroCaja, { body: { monto: 10, motivo: 'x', offset: 0 } });
   assert.equal(retiro.status, 409);
   assert.equal(retiro.body.code, 'CAJA_DIA_ANTERIOR');
-
-  const reabrir = await runHandler(reabrirCaja, { body: { nombre: 'Admin', offset: 0 } });
-  assert.equal(reabrir.status, 409);
 });
 
 test('el historial de cierres no muestra cajas abiertas', async () => {
@@ -622,6 +669,120 @@ test('el historial de cierres no muestra cajas abiertas', async () => {
   const cerrado = await runHandler(obtenerCierresCaja, { query: { offset: '0' } });
   assert.equal(cerrado.body.length, 1);
   assert.equal(cerrado.body[0].estado, 'cerrado');
+});
+
+test('cerrar caja como mañana guarda el turno y permite abrir otra para la tarde', async () => {
+  await abrirCajaHoy();
+  const product = await crearProducto({ cantidad: 10 });
+  await runHandler(crearVenta, {
+    body: { articulos: [{ producto: String(product._id), cantidad: 1 }], pagos: [{ metodo: 'efectivo', monto: 100 }] },
+  });
+
+  const manana = await runHandler(cerrarCaja, { body: { nombre: 'Admin', turno: 'manana', offset: 0 } });
+  assert.equal(manana.status, 200);
+  assert.equal(manana.body.turno, 'manana');
+  assert.equal(Number(manana.body.total), 100);
+
+  const abrirTarde = await abrirCajaHoy('Ana');
+  assert.equal(abrirTarde.status, 201, 'después del cierre de mañana se puede abrir la caja de la tarde');
+
+  await runHandler(crearVenta, {
+    body: { articulos: [{ producto: String(product._id), cantidad: 1 }], pagos: [{ metodo: 'efectivo', monto: 100 }] },
+  });
+  const tarde = await runHandler(cerrarCaja, { body: { nombre: 'Ana', turno: 'tarde', offset: 0 } });
+  assert.equal(tarde.status, 200);
+  assert.equal(tarde.body.turno, 'tarde');
+  assert.equal(Number(tarde.body.total), 100, 'la tarde no debe incluir las ventas de la mañana');
+
+  const docs = await CierreCaja.find({ estado: 'cerrado' }).sort({ turno: 1 });
+  assert.deepEqual(docs.map((d) => d.turno), ['manana', 'tarde']);
+  assert.equal(Number(docs[0].total), 100);
+  assert.equal(Number(docs[1].total), 100);
+});
+
+test('obtenerCajaAbierta informa los turnos cerrados del día', async () => {
+  await abrirCajaHoy();
+  await runHandler(cerrarCaja, { body: { nombre: 'Admin', turno: 'manana', offset: 0 } });
+
+  const trasManana = await runHandler(obtenerCajaAbierta, { query: { offset: '0' } });
+  assert.deepEqual(trasManana.body.turnosCerrados, ['manana']);
+  assert.equal(trasManana.body.diaCompleto, false, 'con solo la mañana el día no está completo');
+
+  await abrirCajaHoy('Ana');
+  await runHandler(cerrarCaja, { body: { nombre: 'Ana', turno: 'tarde', offset: 0 } });
+
+  const trasTarde = await runHandler(obtenerCajaAbierta, { query: { offset: '0' } });
+  assert.deepEqual(trasTarde.body.turnosCerrados, ['manana', 'tarde']);
+  assert.equal(trasTarde.body.diaCompleto, true);
+});
+
+test('cerrar la tarde con enviarReporteDia no rompe el cierre', async () => {
+  await abrirCajaHoy();
+  await runHandler(cerrarCaja, { body: { nombre: 'Admin', turno: 'manana', offset: 0 } });
+  await abrirCajaHoy('Ana');
+
+  const tarde = await runHandler(cerrarCaja, {
+    body: { nombre: 'Ana', turno: 'tarde', enviarReporteDia: true, offset: 0 },
+  });
+  assert.equal(tarde.status, 200);
+  assert.equal(tarde.body.turno, 'tarde');
+});
+
+test('reenviar el reporte del día sin cierres se rechaza', async () => {
+  const res = await runHandler(reenviarReporteDia, { body: { fecha: '2026-01-01', offset: 0 } });
+  assert.equal(res.status, 404);
+});
+
+test('cerrar dos veces el mismo turno se rechaza y la caja queda abierta', async () => {
+  await abrirCajaHoy();
+  const primera = await runHandler(cerrarCaja, { body: { nombre: 'Admin', turno: 'manana', offset: 0 } });
+  assert.equal(primera.status, 200);
+
+  await abrirCajaHoy('Ana');
+  const repetido = await runHandler(cerrarCaja, { body: { nombre: 'Ana', turno: 'manana', offset: 0 } });
+  assert.equal(repetido.status, 409);
+  assert.ok(await CierreCaja.findOne({ estado: 'abierto' }), 'la caja debe seguir abierta tras el rechazo');
+
+  const tarde = await runHandler(cerrarCaja, { body: { nombre: 'Ana', turno: 'tarde', offset: 0 } });
+  assert.equal(tarde.status, 200);
+});
+
+test('cerrar con turno inválido se rechaza y no toca la caja', async () => {
+  await abrirCajaHoy();
+  await assert.rejects(
+    () => runHandler(cerrarCaja, { body: { nombre: 'Admin', turno: 'noche', offset: 0 } }),
+    (error) => error?.name === 'ZodError'
+  );
+  assert.ok(await CierreCaja.findOne({ estado: 'abierto' }), 'la caja debe seguir abierta');
+});
+
+test('no se puede abrir una tercera caja cuando mañana y tarde ya se cerraron', async () => {
+  await abrirCajaHoy();
+  await runHandler(cerrarCaja, { body: { nombre: 'Admin', turno: 'manana', offset: 0 } });
+  await abrirCajaHoy('Ana');
+  await runHandler(cerrarCaja, { body: { nombre: 'Ana', turno: 'tarde', offset: 0 } });
+
+  const tercera = await abrirCajaHoy('Otra');
+  assert.equal(tercera.status, 409);
+});
+
+test('un cierre de mañana no bloquea borrar ventas de la caja de la tarde', async () => {
+  await abrirCajaHoy();
+  const product = await crearProducto({ cantidad: 10 });
+  const ventaManana = await runHandler(crearVenta, {
+    body: { articulos: [{ producto: String(product._id), cantidad: 1 }], pagos: [{ metodo: 'efectivo', monto: 100 }] },
+  });
+  await runHandler(cerrarCaja, { body: { nombre: 'Admin', turno: 'manana', offset: 0 } });
+
+  const borrarManana = await runHandler(eliminarVenta, { params: { id: String(ventaManana.body._id) } });
+  assert.equal(borrarManana.status, 409, 'la venta incluida en el cierre de mañana no se puede borrar');
+
+  await abrirCajaHoy('Ana');
+  const ventaTarde = await runHandler(crearVenta, {
+    body: { articulos: [{ producto: String(product._id), cantidad: 1 }], pagos: [{ metodo: 'efectivo', monto: 100 }] },
+  });
+  const borrarTarde = await runHandler(eliminarVenta, { params: { id: String(ventaTarde.body._id) } });
+  assert.equal(borrarTarde.status, 200, 'la venta de la tarde pertenece a la caja abierta, no al cierre de mañana');
 });
 
 test('el cierre guarda los montos en centavos una sola vez (sin ×100)', async () => {
@@ -1043,4 +1204,383 @@ test('un cierre legacy sin turno del mismo día bloquea abrir caja', async () =>
 
   const res = await abrirCajaHoy();
   assert.equal(res.status, 409, 'un cierre sin turno también debe considerarse el cierre del día');
+});
+
+test('crearProducto asigna código propio a cada variante', async () => {
+  const res = await runHandler(crearProductoController, {
+    body: {
+      nombre: 'Remera códigos',
+      precio: 100,
+      categoria: 'Ropa',
+      codigo: 'NC-000321',
+      variantes: [
+        { talle: 'S', color: 'Azul', deposito: 2 },
+        { talle: 'M', color: 'Azul', deposito: 1 },
+      ],
+    },
+  });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.variantes[0].codigo, 'NC-000321-01');
+  assert.equal(res.body.variantes[1].codigo, 'NC-000321-02');
+  assert.equal(res.body.siguienteSufijoVariante, 3);
+});
+
+test('obtenerProductoPorCodigo resuelve el código de una variante', async () => {
+  const creado = await runHandler(crearProductoController, {
+    body: {
+      nombre: 'Buzo códigos',
+      precio: 100,
+      categoria: 'Ropa',
+      codigo: 'NC-000322',
+      variantes: [
+        { talle: 'S', color: 'Negro', deposito: 1 },
+        { talle: 'L', color: 'Negro', deposito: 1 },
+      ],
+    },
+  });
+  assert.equal(creado.status, 201);
+
+  const porVariante = await runHandler(obtenerProductoPorCodigo, {
+    params: { codigo: 'nc-000322-02' },
+  });
+  assert.equal(porVariante.status, 200);
+  assert.deepEqual(porVariante.body.variante, { talle: 'L', color: 'Negro' });
+
+  const porProducto = await runHandler(obtenerProductoPorCodigo, {
+    params: { codigo: 'NC-000322' },
+  });
+  assert.equal(porProducto.status, 200);
+  assert.equal(porProducto.body.variante, undefined);
+});
+
+test('editar variantes conserva códigos y asigna sufijos nuevos sin reutilizar', async () => {
+  const creado = await runHandler(crearProductoController, {
+    body: {
+      nombre: 'Camisa códigos',
+      precio: 100,
+      categoria: 'Ropa',
+      codigo: 'NC-000323',
+      variantes: [
+        { talle: 'S', color: 'Blanco', deposito: 0 },
+        { talle: 'M', color: 'Blanco', deposito: 0 },
+      ],
+    },
+  });
+  assert.equal(creado.status, 201);
+
+  const editado = await runHandler(actualizarProducto, {
+    params: { id: String(creado.body._id) },
+    body: {
+      variantes: [
+        { talle: 'M', color: 'Blanco', deposito: 0 },
+        { talle: 'L', color: 'Blanco', deposito: 0 },
+      ],
+    },
+  });
+  assert.equal(editado.status, 200);
+  const porTalle = Object.fromEntries(editado.body.variantes.map((v) => [v.talle, v.codigo]));
+  assert.equal(porTalle.M, 'NC-000323-02', 'la variante existente conserva su código');
+  assert.equal(porTalle.L, 'NC-000323-03', 'la variante nueva recibe el sufijo siguiente');
+  assert.equal(editado.body.siguienteSufijoVariante, 4);
+});
+
+test('migrarCodigosVariante completa variantes legacy y es idempotente', async () => {
+  await mongoose.connection.db.collection('productos').insertOne({
+    nombre: 'Producto legacy',
+    precio: 10000,
+    cantidad: 0,
+    categoria: 'Ropa',
+    codigo: 'NC-000324',
+    variantes: [
+      { talle: 'S', color: 'Rojo', cantidad: 1, deposito: 0 },
+      { talle: 'M', color: 'Rojo', cantidad: 0, deposito: 2 },
+    ],
+  });
+
+  const migrados = await migrarCodigosVariante();
+  assert.equal(migrados, 1);
+
+  const actualizado = await Producto.findOne({ codigo: 'NC-000324' }).lean();
+  assert.equal(actualizado.variantes[0].codigo, 'NC-000324-01');
+  assert.equal(actualizado.variantes[1].codigo, 'NC-000324-02');
+  assert.equal(actualizado.siguienteSufijoVariante, 3);
+
+  assert.equal(await migrarCodigosVariante(), 0, 'la segunda pasada no debe tocar nada');
+});
+
+test('eliminar un producto lo manda a la papelera y se puede restaurar', async () => {
+  const product = await Producto.create({
+    nombre: 'Producto papable',
+    precio: 100,
+    cantidad: 0,
+    categoria: 'Categoría papelera',
+    codigo: 'NC-000401',
+  });
+
+  const eliminado = await runHandler(eliminarProductoController, { params: { id: String(product._id) } });
+  assert.equal(eliminado.status, 200);
+  const enBase = await Producto.findById(product._id).lean();
+  assert.equal(enBase.enPapelera, true);
+  assert.ok(enBase.eliminadoEn);
+
+  const lista = await runHandler(obtenerProductos);
+  assert.equal(lista.body.some((p) => String(p._id) === String(product._id)), false, 'no aparece en el listado normal');
+
+  const papelera = await runHandler(obtenerProductos, { query: { papelera: '1' } });
+  assert.equal(papelera.body.some((p) => String(p._id) === String(product._id)), true, 'aparece en la papelera');
+
+  const noAdmin = await runHandler(obtenerProductos, {
+    query: { papelera: '1' },
+    usuario: { id: '507f1f77bcf86cd799439011', nombre: 'Empleado', rol: 'user' },
+  });
+  assert.equal(noAdmin.body.some((p) => String(p._id) === String(product._id)), false, 'un empleado no ve la papelera');
+
+  const categorias = await runHandler(obtenerCategorias);
+  assert.equal(categorias.body.some((c) => c._id === 'categoría papelera'), false, 'la categoría no se lista');
+
+  const porCodigo = await runHandler(obtenerProductoPorCodigo, { params: { codigo: 'NC-000401' } });
+  assert.equal(porCodigo.status, 410);
+  assert.equal(porCodigo.body.code, 'EN_PAPELERA');
+
+  const restaurado = await runHandler(restaurarProducto, { params: { id: String(product._id) } });
+  assert.equal(restaurado.status, 200);
+  assert.equal(restaurado.body.enPapelera, false);
+
+  const porCodigoPost = await runHandler(obtenerProductoPorCodigo, { params: { codigo: 'NC-000401' } });
+  assert.equal(porCodigoPost.status, 200);
+});
+
+test('un producto en la papelera conserva su stock y bloquea operaciones y ventas', async () => {
+  const creado = await runHandler(crearProductoController, {
+    body: {
+      nombre: 'Con stock en papelera',
+      precio: 100,
+      categoria: 'Ropa',
+      codigo: 'NC-000402',
+      variantes: [{ talle: 'M', color: 'Azul', deposito: 2 }],
+    },
+  });
+  assert.equal(creado.status, 201);
+
+  await runHandler(eliminarProductoController, { params: { id: String(creado.body._id) } });
+  const enBase = await Producto.findById(creado.body._id);
+  assert.equal(enBase.variantes[0].deposito, 2, 'el stock se conserva en la papelera');
+
+  const deposito = await runHandler(agregarDeposito, {
+    params: { id: String(creado.body._id) },
+    body: { cantidad: 1, talle: 'M', color: 'Azul' },
+  });
+  assert.equal(deposito.status, 409);
+  assert.equal(deposito.body.code, 'EN_PAPELERA');
+
+  await abrirCajaHoy();
+  const venta = await runHandler(crearVenta, {
+    body: {
+      articulos: [{ producto: String(creado.body._id), cantidad: 1, talle: 'M', color: 'Azul' }],
+      pagos: [{ metodo: 'efectivo', monto: 100 }],
+    },
+  });
+  assert.equal(venta.status, 409);
+  assert.equal(venta.body.code, 'EN_PAPELERA');
+});
+
+test('restaurar se bloquea si existe otro producto activo con el mismo nombre', async () => {
+  const product = await Producto.create({
+    nombre: 'Campera reemplazable',
+    precio: 100,
+    cantidad: 0,
+    categoria: 'Ropa',
+    codigo: 'NC-000403',
+  });
+  await runHandler(eliminarProductoController, { params: { id: String(product._id) } });
+
+  const mismoNombre = await runHandler(crearProductoController, {
+    body: { nombre: 'Campera reemplazable', precio: 200, categoria: 'Ropa', codigo: 'NC-000404', cantidad: 0 },
+  });
+  assert.equal(mismoNombre.status, 201, 'se puede crear otro producto con el mismo nombre');
+
+  const restaurar = await runHandler(restaurarProducto, { params: { id: String(product._id) } });
+  assert.equal(restaurar.status, 409);
+  assert.equal(restaurar.body.code, 'NOMBRE_EN_USO');
+});
+
+test('la venta congela nombre y código y el historial sobrevive al borrado definitivo', async () => {
+  await abrirCajaHoy();
+  const product = await crearProducto({ cantidad: 5, codigo: 'NC-000405' });
+  const venta = await runHandler(crearVenta, {
+    body: { articulos: [{ producto: String(product._id), cantidad: 1 }], pagos: [{ metodo: 'efectivo', monto: 100 }] },
+  });
+  assert.equal(venta.status, 201);
+  assert.equal(venta.body.articulos[0].nombre, 'Remera');
+  assert.equal(venta.body.articulos[0].codigo, 'NC-000405');
+
+  await runHandler(eliminarProductoController, { params: { id: String(product._id) } });
+  const definitivo = await runHandler(eliminarDefinitivo, { params: { id: String(product._id) } });
+  assert.equal(definitivo.status, 200);
+  assert.equal(await Producto.findById(product._id), null);
+
+  const ventaEnBase = await Venta.findById(venta.body._id).lean();
+  assert.equal(ventaEnBase.articulos[0].nombre, 'Remera', 'el ticket conserva el nombre congelado');
+  assert.equal(ventaEnBase.articulos[0].codigo, 'NC-000405');
+});
+
+test('eliminarDefinitivo solo funciona con el producto en la papelera', async () => {
+  const product = await crearProducto({ codigo: 'NC-000406' });
+  const res = await runHandler(eliminarDefinitivo, { params: { id: String(product._id) } });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.code, 'NO_EN_PAPELERA');
+});
+
+test('un empleado no ve ni escanea productos que están en la papelera', async () => {
+  const product = await Producto.create({
+    nombre: 'Producto oculto',
+    precio: 100,
+    cantidad: 3,
+    categoria: 'Oculta',
+    codigo: 'NC-000407',
+  });
+  await runHandler(eliminarProductoController, { params: { id: String(product._id) } });
+
+  const empleado = { id: '507f1f77bcf86cd799439012', nombre: 'Empleado', rol: 'user' };
+
+  const porId = await runHandler(obtenerProducto, { params: { id: String(product._id) }, usuario: empleado });
+  assert.equal(porId.status, 404, 'el empleado no puede ver el producto eliminado');
+
+  const porIdAdmin = await runHandler(obtenerProducto, { params: { id: String(product._id) } });
+  assert.equal(porIdAdmin.status, 200);
+  assert.equal(porIdAdmin.body.enPapelera, true);
+
+  const escaneo = await runHandler(obtenerProductoPorCodigo, { params: { codigo: 'NC-000407' }, usuario: empleado });
+  assert.equal(escaneo.status, 410);
+  assert.equal(escaneo.body.code, 'EN_PAPELERA');
+  assert.equal(escaneo.body.message.includes('Producto oculto'), false, 'el mensaje no revela el nombre');
+
+  const escaneoAdmin = await runHandler(obtenerProductoPorCodigo, { params: { codigo: 'NC-000407' } });
+  assert.equal(escaneoAdmin.status, 410);
+  assert.equal(escaneoAdmin.body.message.includes('Producto oculto'), true, 'el admin sí ve el nombre');
+});
+
+test('el tablero no cuenta categorías que solo existen en la papelera', async () => {
+  await crearProducto({ categoria: 'Ropa' });
+  const eliminado = await crearProducto({ nombre: 'Zapato viejo', categoria: 'Calzado viejo' });
+  await runHandler(eliminarProductoController, { params: { id: String(eliminado._id) } });
+
+  const stats = await runHandler(obtenerEstadisticasTablero);
+  assert.equal(stats.status, 200);
+  assert.equal(stats.body.totalProductos, 1);
+  assert.equal(stats.body.totalCategorias, 1);
+});
+
+test('una devolución de un producto en papelera se bloquea sin tocar el stock', async () => {
+  await abrirCajaHoy();
+  const product = await crearProducto({ cantidad: 5, codigo: 'NC-000408' });
+  await runHandler(eliminarProductoController, { params: { id: String(product._id) } });
+
+  const devolucion = await runHandler(crearDevolucion, {
+    body: { producto: String(product._id), cantidad: 1, motivo: 'papelera', offset: 0 },
+  });
+  assert.equal(devolucion.status, 409);
+  assert.equal(devolucion.body.code, 'EN_PAPELERA');
+  assert.equal((await Producto.findById(product._id)).cantidad, 5, 'el stock no cambia');
+});
+
+test('un cambio con el producto devuelto en la papelera se bloquea sin tocar el stock', async () => {
+  await abrirCajaHoy();
+  const devuelto = await crearProducto({ cantidad: 5, codigo: 'NC-000409' });
+  const cargado = await Producto.create({
+    nombre: 'Buzo activo',
+    precio: 100,
+    cantidad: 5,
+    categoria: 'Ropa',
+    codigo: 'NC-000410',
+  });
+  await runHandler(eliminarProductoController, { params: { id: String(devuelto._id) } });
+
+  const cambio = await runHandler(intercambiarProducto, {
+    body: {
+      productoDevolver: String(devuelto._id),
+      cantidadDevolver: 1,
+      productoCargar: String(cargado._id),
+      cantidadCargar: 1,
+      motivo: 'papelera',
+      offset: 0,
+    },
+  });
+  assert.equal(cambio.status, 409);
+  assert.equal(cambio.body.code, 'EN_PAPELERA');
+  assert.equal((await Producto.findById(devuelto._id)).cantidad, 5);
+  assert.equal((await Producto.findById(cargado._id)).cantidad, 5);
+});
+
+test('no se puede deshacer una devolución si el producto está en la papelera', async () => {
+  await abrirCajaHoy();
+  const product = await crearProducto({ cantidad: 5, codigo: 'NC-000411' });
+  const venta = await runHandler(crearVenta, {
+    body: { articulos: [{ producto: String(product._id), cantidad: 1 }], pagos: [{ metodo: 'efectivo', monto: 100 }] },
+  });
+  const devolucion = await runHandler(crearDevolucion, {
+    body: { producto: String(product._id), cantidad: 1, motivo: 'arrepentimiento', venta: String(venta.body._id), offset: 0 },
+  });
+  assert.equal(devolucion.status, 201);
+
+  await runHandler(eliminarProductoController, { params: { id: String(product._id) } });
+  const stockEnPapelera = (await Producto.findById(product._id)).cantidad;
+
+  const borrado = await runHandler(eliminarDevolucion, { params: { id: String(devolucion.body._id) } });
+  assert.equal(borrado.status, 409);
+  assert.equal(borrado.body.code, 'EN_PAPELERA');
+  assert.equal((await Producto.findById(product._id)).cantidad, stockEnPapelera, 'el stock queda igual');
+  assert.equal(await Devolucion.countDocuments({ _id: devolucion.body._id }), 1, 'la devolución sigue existiendo');
+});
+
+test('no se puede eliminar una venta si un producto está en la papelera', async () => {
+  await abrirCajaHoy();
+  const product = await crearProducto({ cantidad: 5, codigo: 'NC-000412' });
+  const venta = await runHandler(crearVenta, {
+    body: { articulos: [{ producto: String(product._id), cantidad: 1 }], pagos: [{ metodo: 'efectivo', monto: 100 }] },
+  });
+  assert.equal(venta.status, 201);
+  await runHandler(eliminarProductoController, { params: { id: String(product._id) } });
+
+  const borrado = await runHandler(eliminarVenta, { params: { id: String(venta.body._id) } });
+  assert.equal(borrado.status, 409);
+  assert.equal(borrado.body.code, 'EN_PAPELERA');
+  assert.equal(await Venta.countDocuments({ _id: venta.body._id }), 1, 'la venta sigue existiendo');
+  assert.equal((await Producto.findById(product._id)).cantidad, 4, 'el stock queda como estaba');
+});
+
+test('asegurarSnapshotArticulos completa ventas viejas sin nombre', async () => {
+  const product = await crearProducto({ codigo: 'NC-000407' });
+  await mongoose.connection.db.collection('ventas').insertOne({
+    articulos: [{ producto: product._id, cantidad: 1, precio: 10000, subtotal: 10000, talle: '', color: '' }],
+    total: 100,
+    empleado: 'Admin',
+    pagos: [{ metodo: 'efectivo', monto: 100 }],
+    estado: 'activa',
+    fechaCreacion: new Date(),
+    fechaActualizacion: new Date(),
+  });
+
+  const migradas = await asegurarSnapshotArticulos();
+  assert.equal(migradas, 1);
+  const venta = await Venta.findOne({ 'articulos.producto': product._id }).lean();
+  assert.equal(venta.articulos[0].nombre, 'Remera');
+  assert.equal(venta.articulos[0].codigo, 'NC-000407');
+  assert.equal(await asegurarSnapshotArticulos(), 0, 'la segunda pasada no toca nada');
+});
+
+test('obtenerProductos encuentra por código de variante', async () => {
+  await runHandler(crearProductoController, {
+    body: {
+      nombre: 'Buzo búsqueda variante',
+      precio: 100,
+      categoria: 'Ropa',
+      codigo: 'NC-000408',
+      variantes: [{ talle: 'S', color: 'Rojo', deposito: 1 }],
+    },
+  });
+
+  const res = await runHandler(obtenerProductos, { query: { search: 'nc-000408-01' } });
+  assert.equal(res.body.length, 1);
+  assert.equal(res.body[0].nombre, 'Buzo búsqueda variante');
 });

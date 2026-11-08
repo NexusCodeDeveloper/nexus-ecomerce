@@ -12,6 +12,11 @@ const returnSchema = new mongoose.Schema(
       ref: 'Producto',
       required: true,
     },
+    productoNombre: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     cantidad: {
       type: Number,
       required: true,
@@ -31,6 +36,11 @@ const returnSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Producto',
       default: null,
+    },
+    productoCargarNombre: {
+      type: String,
+      trim: true,
+      default: '',
     },
     cantidadCargar: {
       type: Number,
@@ -75,7 +85,7 @@ const returnSchema = new mongoose.Schema(
     },
     pagosOriginales: {
       type: [{
-        metodo: { type: String, enum: ['efectivo', 'transferencia', 'tarjeta'] },
+        metodo: { type: String, enum: ['efectivo', 'transferencia', 'tarjeta', 'cuentaCorriente'] },
         monto: campoCentavosPositivo,
       }],
       default: [],

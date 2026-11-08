@@ -2,12 +2,19 @@ import { z } from 'zod';
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'ID inválido');
 
+const codigoVarianteRegex = /^NC-\d{6}-\d{2}$/;
+
 const schemaVariante = z.object({
-  talle: z.string().optional().default(''),
-  color: z.string().optional().default(''),
+  talle: z.string().trim().max(20, 'El talle es demasiado largo').optional().default(''),
+  color: z.string().trim().max(30, 'El color es demasiado largo').optional().default(''),
   cantidad: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   deposito: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   catalogo: z.number().int().min(0, 'La cantidad no puede ser negativa').optional(),
+  codigo: z
+    .string()
+    .trim()
+    .regex(codigoVarianteRegex, 'El código de variante debe tener el formato NC-000001-01')
+    .optional(),
 });
 
 const schemaCodigo = z.preprocess(
@@ -53,15 +60,15 @@ const validarColoresDeVariantes = (data, ctx) => {
 };
 
 export const schemaCrearProducto = z.object({
-  nombre: z.string().min(1, 'El nombre del producto es obligatorio'),
-  precio: z.number().finite().positive('El precio debe ser mayor a $0'),
+  nombre: z.string().trim().min(1, 'El nombre del producto es obligatorio').max(100, 'El nombre es demasiado largo'),
+  precio: z.number().finite().positive('El precio debe ser mayor a $0').max(99999999.99, 'El precio es demasiado alto'),
   cantidad: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   deposito: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   catalogo: z.number().int().min(0, 'La cantidad no puede ser negativa').optional().default(0),
   variantes: z.array(schemaVariante).optional().default([]),
-  colores: z.array(z.string()).optional().default([]),
-  categoria: z.string().min(1, 'La categoría es obligatoria'),
-  proveedor: z.string().optional().default(''),
+  colores: z.array(z.string().trim().max(30, 'El color es demasiado largo')).max(50, 'Hay demasiados colores').optional().default([]),
+  categoria: z.string().trim().min(1, 'La categoría es obligatoria').max(60, 'La categoría es demasiado larga'),
+  proveedor: z.string().trim().max(80, 'El proveedor es demasiado largo').optional().default(''),
   codigo: schemaCodigo,
   stockMinimo: z.number().int().min(0).optional().default(2),
 }).superRefine((data, ctx) => {
@@ -72,29 +79,29 @@ export const schemaCrearProducto = z.object({
 export const schemaIntercambio = z.object({
   productoDevolver: objectId,
   cantidadDevolver: z.number().int().positive('Debe devolver al menos 1'),
-  talleDevolver: z.string().optional().default(''),
-  colorDevolver: z.string().optional().default(''),
+  talleDevolver: z.string().trim().max(20, 'El talle es demasiado largo').optional().default(''),
+  colorDevolver: z.string().trim().max(30, 'El color es demasiado largo').optional().default(''),
   productoCargar: objectId,
   cantidadCargar: z.number().int().positive('Debe cargar al menos 1'),
-  talleCargar: z.string().optional().default(''),
-  colorCargar: z.string().optional().default(''),
-  motivo: z.string().optional().default('Cambio'),
+  talleCargar: z.string().trim().max(20, 'El talle es demasiado largo').optional().default(''),
+  colorCargar: z.string().trim().max(30, 'El color es demasiado largo').optional().default(''),
+  motivo: z.string().trim().max(200, 'El motivo es demasiado largo').optional().default('Cambio'),
   venta: objectId.optional(),
-  metodoPago: z.enum(['efectivo', 'transferencia', 'tarjeta']).optional(),
-  empleado: z.string().optional(),
+  metodoPago: z.enum(['efectivo', 'transferencia', 'tarjeta', 'cuentaCorriente']).optional(),
+  empleado: z.string().trim().max(80, 'El empleado es demasiado largo').optional(),
   offset: z.number().int().optional(),
 });
 
 export const schemaAgregarStock = z.object({
   cantidad: z.number().int().positive('Debe agregar al menos 1'),
-  talle: z.string().optional().default(''),
-  color: z.string().optional().default(''),
+  talle: z.string().trim().max(20, 'El talle es demasiado largo').optional().default(''),
+  color: z.string().trim().max(30, 'El color es demasiado largo').optional().default(''),
 });
 
 export const schemaMovimientoStock = z.object({
   cantidad: z.number().int().positive('La cantidad debe ser al menos 1'),
-  talle: z.string().optional().default(''),
-  color: z.string().optional().default(''),
+  talle: z.string().trim().max(20, 'El talle es demasiado largo').optional().default(''),
+  color: z.string().trim().max(30, 'El color es demasiado largo').optional().default(''),
 });
 
 export const schemaPasarSalon = z.object({
@@ -102,16 +109,16 @@ export const schemaPasarSalon = z.object({
     z.object({
       producto: objectId,
       cantidad: z.number().int().positive('La cantidad debe ser al menos 1'),
-      talle: z.string().optional().default(''),
-      color: z.string().optional().default(''),
+      talle: z.string().trim().max(20, 'El talle es demasiado largo').optional().default(''),
+      color: z.string().trim().max(30, 'El color es demasiado largo').optional().default(''),
     })
   ).min(1, 'Debe incluir al menos una variante'),
 });
 
 export const schemaDeposito = z.object({
   cantidad: z.number().int().min(0, 'La cantidad no puede ser negativa'),
-  talle: z.string().optional().default(''),
-  color: z.string().optional().default(''),
+  talle: z.string().trim().max(20, 'El talle es demasiado largo').optional().default(''),
+  color: z.string().trim().max(30, 'El color es demasiado largo').optional().default(''),
   modo: z.enum(['sumar', 'fijar']).optional().default('sumar'),
 });
 
@@ -123,16 +130,37 @@ export const schemaCatalogo = z.object({
 });
 
 export const schemaActualizarProducto = z.object({
-  nombre: z.string().min(1, 'El nombre del producto es obligatorio').optional(),
-  precio: z.number().finite().positive('El precio debe ser mayor a $0').optional(),
+  nombre: z.string().trim().min(1, 'El nombre del producto es obligatorio').max(100, 'El nombre es demasiado largo').optional(),
+  precio: z.number().finite().positive('El precio debe ser mayor a $0').max(99999999.99, 'El precio es demasiado alto').optional(),
   deposito: z.number().int().min(0, 'La cantidad no puede ser negativa').optional(),
   catalogo: z.number().int().min(0, 'La cantidad no puede ser negativa').optional(),
   variantes: z.array(schemaVariante).optional(),
-  colores: z.array(z.string()).optional(),
-  categoria: z.string().min(1, 'La categoría es obligatoria').optional(),
-  proveedor: z.string().optional(),
+  colores: z.array(z.string().trim().max(30, 'El color es demasiado largo')).max(50, 'Hay demasiados colores').optional(),
+  categoria: z.string().trim().min(1, 'La categoría es obligatoria').max(60, 'La categoría es demasiado larga').optional(),
+  proveedor: z.string().trim().max(80, 'El proveedor es demasiado largo').optional(),
   stockMinimo: z.number().int().min(0).optional(),
 }).superRefine((data, ctx) => {
   validarColoresDeVariantes(data, ctx);
   validarVariantesUnicas(data, ctx);
 });
+
+export const LIMITE_PRODUCTOS_AUMENTO = 5000;
+
+export const schemaAumentoPrecio = z
+  .object({
+    tipo: z.enum(['porcentaje', 'monto']),
+    valor: z.number().finite().positive('El aumento debe ser mayor a 0').max(99999999.99, 'El valor es demasiado alto'),
+    productos: z
+      .array(objectId)
+      .min(1, 'Seleccioná al menos un producto')
+      .max(LIMITE_PRODUCTOS_AUMENTO, `No se pueden aumentar más de ${LIMITE_PRODUCTOS_AUMENTO} productos a la vez`),
+  })
+  .superRefine((data, ctx) => {
+    if (data.tipo === 'porcentaje' && data.valor > 10000) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'El porcentaje no puede superar el 10000%',
+        path: ['valor'],
+      });
+    }
+  });

@@ -12,6 +12,10 @@ const sinClave = '-clave -versionToken';
 
 const esMismoUsuario = (req, target) => String(target._id) === String(req.usuario.id);
 
+const esAdminPrincipal = (usuario) =>
+  usuario?.rol === 'admin' &&
+  String(usuario.email || '').trim().toLowerCase() === String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+
 const ultimoAdminActivo = async (req, target) => {
   if (target.rol !== 'admin') return false;
   const cantidad = await Usuario.countDocuments(
@@ -23,7 +27,7 @@ const ultimoAdminActivo = async (req, target) => {
 export const obtenerUsuarios = async (req, res, next) => {
   try {
     const usuarios = await Usuario.find(filtroTienda(req), sinClave).sort({ fechaCreacion: 1 });
-    res.json(usuarios);
+    res.json(usuarios.map((usuario) => ({ ...usuario.toJSON(), protegido: esAdminPrincipal(usuario) })));
   } catch (error) {
     next(error);
   }
@@ -64,8 +68,8 @@ export const actualizarUsuario = async (req, res, next) => {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
-    if (usuario.rol === 'admin') {
-      return res.status(400).json({ message: 'Las cuentas de administrador no se pueden modificar' });
+    if (esAdminPrincipal(usuario)) {
+      return res.status(400).json({ message: 'La cuenta principal no se puede modificar' });
     }
 
     if (data.rol !== undefined && usuario.rol !== data.rol) {
@@ -104,8 +108,8 @@ export const reiniciarClave = async (req, res, next) => {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
-    if (usuario.rol === 'admin' && !esMismoUsuario(req, usuario)) {
-      return res.status(400).json({ message: 'No podés reiniciar la clave de otro administrador' });
+    if (esAdminPrincipal(usuario) && !esMismoUsuario(req, usuario)) {
+      return res.status(400).json({ message: 'No podés reiniciar la clave de la cuenta principal' });
     }
 
     usuario.clave = clave;
@@ -126,8 +130,8 @@ export const cambiarActivo = async (req, res, next) => {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
-    if (usuario.rol === 'admin') {
-      return res.status(400).json({ message: 'Las cuentas de administrador no se pueden desactivar' });
+    if (esAdminPrincipal(usuario)) {
+      return res.status(400).json({ message: 'La cuenta principal no se puede desactivar' });
     }
 
     if (esMismoUsuario(req, usuario)) {
@@ -161,8 +165,8 @@ export const eliminarUsuario = async (req, res, next) => {
       return res.status(404).json({ message: 'Usuario no encontrado' });
     }
 
-    if (usuario.rol === 'admin') {
-      return res.status(400).json({ message: 'Las cuentas de administrador no se pueden eliminar' });
+    if (esAdminPrincipal(usuario)) {
+      return res.status(400).json({ message: 'La cuenta principal no se puede eliminar' });
     }
 
     if (esMismoUsuario(req, usuario)) {

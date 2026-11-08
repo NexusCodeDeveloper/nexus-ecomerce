@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { crearDevolucion } from '../../api/devoluciones';
-import { intercambiarProducto, obtenerProductos, obtenerProductoPorCodigo } from '../../api/productos';
+import { intercambiarProducto, obtenerProductos, obtenerProducto, obtenerProductoPorCodigo } from '../../api/productos';
 import { useIosAlert } from '../alerts';
 import { obtenerMensajeErrorApi } from '../../utils/apiError';
 import IosModal from '../ui/IosModal';
@@ -11,6 +11,7 @@ import ScannerButton from '../scanner/ScannerButton';
 import ScannerModal from '../scanner/ScannerModal';
 import { useLector } from '../../context/lectorContexto';
 import { formatMoney } from '../../utils/format';
+import { CANTIDAD, hayErrores, LIMITES, validarEntero, validarTexto } from '../../utils/validacion';
 
 const variantLabel = (v) => [v.talle, v.color].filter(Boolean).join(' / ') || 'Base';
 
@@ -28,6 +29,7 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
 
   const [products, setProducts] = useState([]);
   const [productsError, setProductsError] = useState('');
+  const [codigosVariantes, setCodigosVariantes] = useState({});
   const [itemIdx, setItemIdx] = useState(0);
   const [cantidad, setCantidad] = useState('1');
   const [motivo, setMotivo] = useState('');
@@ -38,6 +40,7 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
   const [exchangeCantidad, setExchangeCantidad] = useState('1');
   const [exchangeVariantIdx, setExchangeVariantIdx] = useState('');
   const [metodoPago, setMetodoPago] = useState('efectivo');
+  const [errores, setErrores] = useState({});
   const [saving, setSaving] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
 
@@ -45,30 +48,59 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
   const item = items[itemIdx] || items[0] || {};
   const maxCantidad = Number(item.cantidad) || 0;
 
+  const codigoDeItem = (it) => {
+    const id = String(getItemId(it) || '');
+    const variantes = codigosVariantes[id] || [];
+    if (!variantes.length) return '';
+    const norm = (v) => String(v ?? '').trim().toLowerCase();
+    const match = variantes.find(
+      (v) => norm(v.talle) === norm(it.talle) && norm(v.color) === norm(it.color)
+    );
+    return match?.codigo || '';
+  };
+
   useEffect(() => {
-    if (open && sale) {
-      const saleItems = getItems(sale);
-      const codigoBuscado = String(initialCodigo || '').trim().toLowerCase();
-      const idx = codigoBuscado
-        ? saleItems.findIndex((it) => String(it.producto?.codigo || '').toLowerCase() === codigoBuscado)
-        : -1;
-      const idxFinal = idx !== -1 ? idx : 0;
-      setItemIdx(idxFinal);
-      setCantidad(String(saleItems[idxFinal]?.cantidad || 1));
-      setMotivo('');
-      setOtroMotivo('');
-      setExchangeActivo(defaultExchange);
-      setExchangeSearch('');
-      setExchangeTarget(null);
-      setExchangeCantidad('1');
-      setExchangeVariantIdx('');
-      setMetodoPago(sale.pagos?.[0]?.metodo || 'efectivo');
-      setProducts([]);
-      setProductsError('');
-      if (codigoBuscado && idx === -1) {
-        toast({ message: `El código "${initialCodigo}" no está en este ticket`, duration: 2600 });
+    if (!open || !sale) return undefined;
+    let cancelado = false;
+    const saleItems = getItems(sale);
+    const codigoBuscado = String(initialCodigo || '').trim().toLowerCase();
+    const idx = codigoBuscado
+      ? saleItems.findIndex((it) => String(it.producto?.codigo || '').toLowerCase() === codigoBuscado)
+      : -1;
+    const idxFinal = idx !== -1 ? idx : 0;
+    setItemIdx(idxFinal);
+    setCantidad(String(saleItems[idxFinal]?.cantidad || 1));
+    setMotivo('');
+    setOtroMotivo('');
+    setExchangeActivo(defaultExchange);
+    setExchangeSearch('');
+    setExchangeTarget(null);
+    setExchangeCantidad('1');
+    setExchangeVariantIdx('');
+    setMetodoPago(sale.pagos?.[0]?.metodo || 'efectivo');
+    setProducts([]);
+    setProductsError('');
+    setCodigosVariantes({});
+    setErrores({});
+    const idsProductos = [...new Set(
+      saleItems.map((it) => String(getItemId(it) || '')).filter(Boolean)
+    )];
+    Promise.all(idsProductos.map(async (id) => {
+      try {
+        const { data } = await obtenerProducto(id);
+        return [id, data?.variantes || []];
+      } catch {
+        return [id, []];
       }
+    })).then((pares) => {
+      if (!cancelado) setCodigosVariantes(Object.fromEntries(pares));
+    });
+    if (codigoBuscado && idx === -1) {
+      toast({ message: `El código "${initialCodigo}" no está en este ticket`, duration: 2600 });
     }
+    return () => {
+      cancelado = true;
+    };
   }, [open, sale, defaultExchange, initialCodigo, toast]);
 
   useEffect(() => {
@@ -102,6 +134,7 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
   const selectItem = (idx) => {
     setItemIdx(idx);
     setCantidad(String(items[idx]?.cantidad || 1));
+    setErrores((prev) => ({ ...prev, cantidad: '' }));
   };
 
   const cantidadDevolver = Number(cantidad) || 0;
@@ -118,18 +151,23 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
   const confirmar = async () => {
     if (saving) return;
     const motivoFinal = motivo === 'Otro' ? otroMotivo.trim() : motivo.trim();
-    if (!motivoFinal) {
-      alert({ icon: 'warning', title: 'Campo requerido', message: 'Debe ingresar un motivo' });
-      return;
+    const errs = {
+      motivo: validarTexto(motivoFinal, LIMITES.motivo, 'El motivo'),
+      cantidad: validarEntero(cantidad, {
+        min: CANTIDAD.min,
+        max: maxCantidad,
+        etiqueta: 'La cantidad a devolver',
+      }),
+    };
+    if (exchangeActivo) {
+      errs.exchangeCantidad = validarEntero(exchangeCantidad, {
+        min: CANTIDAD.min,
+        max: CANTIDAD.max,
+        etiqueta: 'La cantidad a cargar',
+      });
     }
-    if (cantidadDevolver < 1) {
-      alert({ icon: 'warning', title: 'Cantidad inválida', message: 'Debe devolver al menos 1 unidad' });
-      return;
-    }
-    if (cantidadDevolver > maxCantidad) {
-      alert({ icon: 'warning', title: 'Cantidad inválida', message: `Solo hay ${maxCantidad} unidad(es) de este producto en el ticket` });
-      return;
-    }
+    setErrores(errs);
+    if (hayErrores(errs)) return;
 
     let payload;
     let esCambio = false;
@@ -140,10 +178,6 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
       }
       if (exchangeTarget.variantes?.length > 0 && exchangeVariantIdx === '') {
         alert({ icon: 'warning', title: 'Campo requerido', message: 'Debe seleccionar la variante del producto nuevo' });
-        return;
-      }
-      if (cantidadCargar < 1) {
-        alert({ icon: 'warning', title: 'Cantidad inválida', message: 'Debe cargar al menos 1 unidad' });
         return;
       }
       const excVariant = exchangeTarget.variantes?.[Number(exchangeVariantIdx)];
@@ -267,6 +301,7 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
                 <option key={i} value={i} className="bg-ios-surface2">
                   {getItemNombre(it)}
                   {[it.talle, it.color].filter(Boolean).join(' / ') ? ` — ${[it.talle, it.color].filter(Boolean).join(' / ')}` : ''}
+                  {` · ${codigoDeItem(it) || 'sin código'}`}
                   {' '}({it.cantidad} unid.)
                 </option>
               ))}
@@ -280,18 +315,23 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
             {[item.talle, item.color].filter(Boolean).join(' / ') && (
               <span className="text-ios-tertiary font-normal"> — {[item.talle, item.color].filter(Boolean).join(' / ')}</span>
             )}
-            <span className="text-ios-tertiary font-normal"> · {maxCantidad} unid. · {formatMoney(item.precio)}</span>
+            <span className="text-ios-tertiary font-normal"> · {codigoDeItem(item) || 'sin código'} · {maxCantidad} unid. · {formatMoney(item.precio)}</span>
           </p>
         )}
 
-        <IosField label="Cantidad a devolver" hint={`Disponible en el ticket: ${maxCantidad}`}>
+        <IosField label="Cantidad a devolver" hint={`Disponible en el ticket: ${maxCantidad}`} error={errores.cantidad}>
           <IosInput
             type="text"
             inputMode="numeric"
+            maxLength={6}
+            invalid={Boolean(errores.cantidad)}
             value={cantidad}
             onChange={(e) => {
               const v = e.target.value;
-              if (v === '' || /^\d+$/.test(v)) setCantidad(v);
+              if ((v === '' || /^\d+$/.test(v)) && (v === '' || Number(v) <= CANTIDAD.max)) {
+                setErrores((prev) => ({ ...prev, cantidad: '' }));
+                setCantidad(v);
+              }
             }}
           />
         </IosField>
@@ -367,20 +407,25 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
                       <option value="" className="bg-ios-surface2">Seleccionar...</option>
                       {exchangeTarget.variantes.map((v, i) => (
                         <option key={i} value={String(i)} className="bg-ios-surface2">
-                          {variantLabel(v)} (stock: {v.cantidad})
+                          {variantLabel(v)} · {v.codigo || 'sin código'} (stock: {v.cantidad})
                         </option>
                       ))}
                     </IosSelect>
                   </IosField>
                 )}
-                <IosField label="Cantidad a cargar">
+                <IosField label="Cantidad a cargar" error={errores.exchangeCantidad}>
                   <IosInput
                     type="text"
                     inputMode="numeric"
+                    maxLength={6}
+                    invalid={Boolean(errores.exchangeCantidad)}
                     value={exchangeCantidad}
                     onChange={(e) => {
                       const v = e.target.value;
-                      if (v === '' || /^\d+$/.test(v)) setExchangeCantidad(v);
+                      if ((v === '' || /^\d+$/.test(v)) && (v === '' || Number(v) <= CANTIDAD.max)) {
+                        setErrores((prev) => ({ ...prev, exchangeCantidad: '' }));
+                        setExchangeCantidad(v);
+                      }
                     }}
                   />
                 </IosField>
@@ -403,6 +448,9 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
                       <option value="efectivo" className="bg-ios-surface2">Efectivo</option>
                       <option value="transferencia" className="bg-ios-surface2">Transferencia</option>
                       <option value="tarjeta" className="bg-ios-surface2">Tarjeta</option>
+                      {sale?.cliente && (
+                        <option value="cuentaCorriente" className="bg-ios-surface2">Cuenta corriente</option>
+                      )}
                     </IosSelect>
                   </IosField>
                 )}
@@ -411,8 +459,15 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
           </>
         )}
 
-        <IosField label="Motivo" required>
-          <IosSelect value={motivo} onChange={(e) => setMotivo(e.target.value)}>
+        <IosField label="Motivo" required error={motivo !== 'Otro' ? errores.motivo : ''}>
+          <IosSelect
+            value={motivo}
+            invalid={Boolean(motivo !== 'Otro' && errores.motivo)}
+            onChange={(e) => {
+              setErrores((prev) => ({ ...prev, motivo: '' }));
+              setMotivo(e.target.value);
+            }}
+          >
             <option value="" className="bg-ios-surface2">Seleccionar motivo</option>
             <option value="Defectuoso" className="bg-ios-surface2">Defectuoso</option>
             <option value="Cambio de talla" className="bg-ios-surface2">Cambio de talla</option>
@@ -423,11 +478,16 @@ const FormularioDevolucion = ({ sale, open, onClose, onDone, defaultExchange = f
         </IosField>
 
         {motivo === 'Otro' && (
-          <IosField label="Detalle del motivo">
+          <IosField label="Detalle del motivo" error={errores.motivo}>
             <IosInput
               type="text"
               value={otroMotivo}
-              onChange={(e) => setOtroMotivo(e.target.value)}
+              maxLength={LIMITES.motivo.max}
+              invalid={Boolean(errores.motivo)}
+              onChange={(e) => {
+                setErrores((prev) => ({ ...prev, motivo: '' }));
+                setOtroMotivo(e.target.value);
+              }}
               placeholder="Escribí el motivo..."
             />
           </IosField>

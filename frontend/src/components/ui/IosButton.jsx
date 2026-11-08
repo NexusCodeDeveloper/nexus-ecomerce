@@ -1,9 +1,9 @@
 const variants = {
-  primary: 'bg-gradient-to-b from-[#0E8CFF] to-ios-tint text-white shadow-[0_4px_14px_rgba(10,132,255,0.35)] hover:shadow-[0_6px_20px_rgba(10,132,255,0.45)]',
-  tinted: 'bg-ios-tint/15 text-ios-tint',
-  destructive: 'bg-gradient-to-b from-[#FF6A5E] to-ios-red text-white shadow-[0_4px_14px_rgba(255,69,58,0.35)]',
-  destructiveTinted: 'bg-ios-red/15 text-ios-red',
-  gray: 'bg-ios-surface2 text-ios-label hover:bg-ios-surface3',
+  primary: 'btn-vivo btn-vivo-azul',
+  tinted: 'btn-vivo btn-vivo-verde',
+  destructive: 'btn-vivo btn-vivo-rojo',
+  destructiveTinted: 'btn-vivo btn-vivo-rojo',
+  gray: 'btn-vivo btn-vivo-gris',
   plain: 'text-ios-tint bg-transparent',
   plainDanger: 'text-ios-red bg-transparent',
 };

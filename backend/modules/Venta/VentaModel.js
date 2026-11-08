@@ -3,6 +3,8 @@ import { campoCentavos, campoCentavosPositivo } from '../../utils/DineroUtils.js
 
 const itemSchema = new mongoose.Schema({
   producto: { type: mongoose.Schema.Types.ObjectId, ref: 'Producto', required: true },
+  nombre: { type: String, trim: true, default: '' },
+  codigo: { type: String, trim: true, default: '' },
   cantidad: { type: Number, required: true, min: 1 },
   precio: { ...campoCentavosPositivo, required: true },
   talle: { type: String, default: '' },
@@ -21,10 +23,12 @@ const saleSchema = new mongoose.Schema({
   total: { ...campoCentavosPositivo, required: true },
   empleado: { type: String, required: true, trim: true },
   pagos: [{
-    metodo: { type: String, enum: ['efectivo', 'transferencia', 'tarjeta'], required: true },
+    metodo: { type: String, enum: ['efectivo', 'transferencia', 'tarjeta', 'cuentaCorriente'], required: true },
     monto: { ...campoCentavosPositivo, required: true },
   }],
-  metodoPago: { type: String, enum: ['efectivo', 'transferencia', 'tarjeta'] },
+  metodoPago: { type: String, enum: ['efectivo', 'transferencia', 'tarjeta', 'cuentaCorriente'] },
+  cliente: { type: mongoose.Schema.Types.ObjectId, ref: 'Cliente' },
+  clienteNombre: { type: String, trim: true, default: '' },
   descuento: { type: Number, default: 0, min: 0, max: 100 },
   estado: { type: String, enum: ['activa', 'devuelta'], default: 'activa' },
   montoDevuelto: { ...campoCentavosPositivo, default: 0 },
@@ -35,6 +39,13 @@ const saleSchema = new mongoose.Schema({
     monto: campoCentavos,
     fecha: { type: Date, default: Date.now },
   }],
+  planCuotas: {
+    cantidadCuotas: { type: Number, min: 1, default: 1 },
+    interesPorcentaje: { type: Number, default: 0, min: 0 },
+    tasaMoraMensual: { type: Number, default: 0, min: 0 },
+    primerVencimiento: { type: Date },
+    montoFinanciado: { ...campoCentavosPositivo, default: 0 },
+  },
 }, { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' }, toJSON: { getters: true } });
 
 saleSchema.pre('save', function (next) {
@@ -55,5 +66,11 @@ saleSchema.index({ tienda: 1, 'articulos.producto': 1, fechaCreacion: -1 });
 saleSchema.index({ tienda: 1, fechaCreacion: -1 });
 saleSchema.index({ tienda: 1, 'pagos.metodo': 1 });
 saleSchema.index({ tienda: 1, estado: 1 });
+saleSchema.index({ 'articulos.producto': 1, fechaCreacion: -1 });
+saleSchema.index({ fechaCreacion: -1 });
+saleSchema.index({ 'pagos.metodo': 1 });
+saleSchema.index({ estado: 1 });
+saleSchema.index({ cliente: 1, fechaCreacion: -1 });
+saleSchema.index({ 'planCuotas.primerVencimiento': 1 });
 
 export default mongoose.model('Venta', saleSchema, 'ventas');

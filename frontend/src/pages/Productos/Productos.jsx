@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   obtenerProductos,
+  obtenerProducto,
   obtenerProductoPorCodigo,
   eliminarProducto,
   retirarStock,
@@ -10,19 +11,25 @@ import {
 import { obtenerVentas as obtenerTickets } from '../../api/ventas';
 import { obtenerMensajeErrorApi } from '../../utils/apiError';
 import { formatMoney, formatDate } from '../../utils/format';
-import { LIMITE_PRODUCTOS, depositoTotal, variantShortLabel, tieneStockBajo, soloEnDeposito, paramsProductos } from '../../utils/productos';
+import { precioVigente, tieneOferta, etiquetaOferta } from '../../utils/precios';
+import { depositoTotal, tieneStockBajo, soloEnDeposito, paramsProductos } from '../../utils/productos';
+import { calcularPagina } from '../../utils/paginacion';
+import { CANTIDAD, limitarTexto } from '../../utils/validacion';
 import { useApi } from '../../hooks/useApi';
 import { useCategorias } from '../../hooks/useCategorias';
 import { useDropdownAnclado } from '../../hooks/useDropdownAnclado';
 import { escucharPush } from '../../services/GestorPush';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
+import Paginacion from '../../components/common/Paginacion';
+import AvisoPromociones from '../../components/Promociones/AvisoPromociones';
 import ScannerButton from '../../components/scanner/ScannerButton';
 import ScannerModal from '../../components/scanner/ScannerModal';
 import FormularioDevolucion from '../../components/FormularioDevolucion/FormularioDevolucion';
+import PlanCuentaCorriente from '../../components/Carrito/PlanCuentaCorriente';
 import FiltroCategorias from '../../components/FiltroCategorias/FiltroCategorias';
 import { useAutenticacion } from '../../context/autenticacionContexto';
 import { useLector } from '../../context/lectorContexto';
-import { useCarrito } from '../../context/carritoContexto';
+import { useCarrito, claveItemCarrito } from '../../context/carritoContexto';
 import { useCaja } from '../../context/cajaContexto';
 import { useIosAlert, IconAlert } from '../../components/alerts';
 import IosButton from '../../components/ui/IosButton';
@@ -40,13 +47,38 @@ const variantLabel = (v) => {
   return `${label} (${v.cantidad})`;
 };
 
+const filasDetalle = (p) => {
+  const filas = [];
+  if (p.colores?.length > 0) {
+    for (const color of p.colores) {
+      filas.push({ tipo: 'color', texto: color });
+      const vars = (p.variantes || []).filter((v) => v.color === color);
+      if (vars.length === 0) {
+        filas.push({ tipo: 'vacio' });
+      } else {
+        for (const v of vars) {
+          filas.push({ tipo: 'variante', detalle: `${v.talle || 'Base'} (${v.cantidad || 0})`, codigo: v.codigo || '' });
+        }
+      }
+    }
+  } else if (p.variantes?.length > 0) {
+    for (const v of p.variantes) {
+      filas.push({ tipo: 'variante', detalle: variantLabel(v), codigo: v.codigo || '' });
+    }
+  }
+  return filas;
+};
+
 const Productos = () => {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [searchDebounced, setSearchDebounced] = useState('');
   const [categoriaActiva, setCategoriaActiva] = useState('');
+  const [pagina, setPagina] = useState(1);
+  const [porPagina, setPorPagina] = useState(25);
   const { dropdown, menuRef: dropdownRef, toggle: toggleDropdown, close: closeDropdown } = useDropdownAnclado();
   const returnSeqRef = useRef(0);
+  const ultimoEscaneoRef = useRef({ codigo: '', ts: 0 });
 
   const [returnPicker, setReturnPicker] = useState(null);
   const [returnTickets, setReturnTickets] = useState([]);
@@ -60,10 +92,12 @@ const Productos = () => {
   const [scannerContinuo, setScannerContinuo] = useState(false);
   const [quickAdd, setQuickAdd] = useState(null);
   const [qaCantidad, setQaCantidad] = useState('1');
+  const [qaError, setQaError] = useState('');
   const [qaVariantIdx, setQaVariantIdx] = useState('');
 
   const [retirarModal, setRetirarModal] = useState(null);
   const [retirarCantidad, setRetirarCantidad] = useState('1');
+  const [retirarError, setRetirarError] = useState('');
   const [retirarVariantIdx, setRetirarVariantIdx] = useState('');
   const [retirarSaving, setRetirarSaving] = useState(false);
 
@@ -77,6 +111,7 @@ const Productos = () => {
     showCartModal,
     openCart,
     closeCart,
+    lastAdded,
     metodos,
     sellEmpleado,
     sellDescuento,
@@ -96,7 +131,7 @@ const Productos = () => {
     confirmSale,
     saleVersion,
   } = useCarrito();
-  const { caja, cierreHoy, esDeHoy, openAbrir, openReabrir } = useCaja();
+  const { caja, diaCompleto, esDeHoy, openAbrir } = useCaja();
 
   const [lowStockOpen, setLowStockOpen] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
@@ -109,11 +144,16 @@ const Productos = () => {
   const { categorias, recargarCategorias } = useCategorias();
   const productosApi = useApi(
     async () => {
-      const prodRes = await obtenerProductos(paramsProductos({ search: searchDebounced, categoria: categoriaActiva }));
-      const lista = Array.isArray(prodRes.data) ? prodRes.data : [];
-      return { lista, tope: lista.length >= LIMITE_PRODUCTOS };
+      const prodRes = await obtenerProductos({
+        ...paramsProductos({ search: searchDebounced, categoria: categoriaActiva }),
+        offset: (pagina - 1) * porPagina,
+        limit: porPagina,
+        conTotal: 1,
+      });
+      const lista = Array.isArray(prodRes.data?.productos) ? prodRes.data.productos : [];
+      return { lista, total: Number(prodRes.data?.total) || 0 };
     },
-    { deps: [searchDebounced, categoriaActiva], mensajeError: 'Error al cargar productos' }
+    { deps: [searchDebounced, categoriaActiva, pagina, porPagina], mensajeError: 'Error al cargar productos' }
   );
   const lowStockApi = useApi(
     async () => {
@@ -126,8 +166,17 @@ const Productos = () => {
   const { run: recargarProductos, loading, error } = productosApi;
   const { run: recargarLowStock, error: lowStockError } = lowStockApi;
   const products = productosApi.error ? [] : productosApi.data?.lista || [];
-  const topeAlcanzado = !productosApi.error && Boolean(productosApi.data?.tope);
+  const totalProductos = productosApi.error ? 0 : productosApi.data?.total || 0;
+  const { totalPaginas } = calcularPagina(totalProductos, porPagina, pagina);
   const lowStock = lowStockApi.data || [];
+
+  useEffect(() => {
+    setPagina(1);
+  }, [searchDebounced, categoriaActiva]);
+
+  useEffect(() => {
+    if (pagina > totalPaginas) setPagina(totalPaginas);
+  }, [pagina, totalPaginas]);
 
   const agotados = lowStock.filter((i) => i.cantidad === 0);
   const bajos = lowStock.filter((i) => i.cantidad > 0);
@@ -151,10 +200,19 @@ const Productos = () => {
   }, [saleVersion, recargarProductos, recargarLowStock]);
 
   const handleDelete = async (id) => {
+    let ventas = 0;
+    let nombre = 'este producto';
+    try {
+      const { data } = await obtenerProducto(id);
+      ventas = Number(data?.uso?.ventas) || 0;
+      nombre = data?.nombre || nombre;
+    } catch {
+      /* si no se pudo consultar, se muestra el aviso igual */
+    }
     const confirmed = await confirm({
       icon: 'warning',
-      title: '¿Eliminar este producto?',
-      message: 'Esta acción no se puede deshacer',
+      title: `¿Eliminar "${nombre}"?`,
+      message: `El producto se mueve a la Papelera y se oculta del catálogo y de las ventas.${ventas > 0 ? ` Tiene ${ventas} venta(s) registrada(s).` : ''} Las ventas y tickets ya emitidos NO se actualizan. Podés restaurarlo desde la Papelera.`,
       confirmText: 'Eliminar',
       destructive: true,
     });
@@ -164,7 +222,7 @@ const Productos = () => {
       recargarProductos();
       recargarLowStock();
       recargarCategorias();
-      toast({ message: 'Producto eliminado' });
+      toast({ message: 'Producto movido a la Papelera' });
     } catch (err) {
       alert({ icon: 'error', title: 'Error', message: obtenerMensajeErrorApi(err, 'Error al eliminar producto') });
     }
@@ -173,14 +231,15 @@ const Productos = () => {
   const openQuickAdd = (product) => {
     setQuickAdd(product);
     setQaCantidad('1');
+    setQaError('');
     setQaVariantIdx('');
   };
 
   const confirmQuickAdd = () => {
     if (!quickAdd) return;
     const cantidad = Number(qaCantidad);
-    if (cantidad < 1) {
-      alert({ icon: 'warning', title: 'Cantidad inválida' });
+    if (!Number.isInteger(cantidad) || cantidad < CANTIDAD.min || cantidad > CANTIDAD.max) {
+      setQaError(`La cantidad debe estar entre ${CANTIDAD.min} y ${CANTIDAD.max}`);
       return;
     }
     if (quickAdd.variantes?.length > 0 && qaVariantIdx === '') {
@@ -195,16 +254,19 @@ const Productos = () => {
       (i) => i.producto === quickAdd._id && i.talle === talle && i.color === color
     );
     if (Number(enCarrito?.cantidad || 0) + cantidad > stockDisponible) {
-      alert({ icon: 'warning', title: 'Stock insuficiente', message: `Solo hay ${stockDisponible} unidad(es) disponible(s)` });
+      setQaError(`Solo hay ${stockDisponible} unidad(es) disponible(s)`);
       return;
     }
+    setQaError('');
     addItem({
       producto: quickAdd._id,
       nombre: quickAdd.nombre,
-      precio: quickAdd.precio,
+      precio: precioVigente(quickAdd),
+      precioOriginal: tieneOferta(quickAdd) ? Number(quickAdd.precio) : undefined,
       cantidad,
       talle,
       color,
+      codigo: variant?.codigo || '',
     });
     setQuickAdd(null);
     toast({ message: 'Agregado al carrito', duration: 1400 });
@@ -213,6 +275,7 @@ const Productos = () => {
   const openRetirar = (product) => {
     setRetirarModal(product);
     setRetirarCantidad('1');
+    setRetirarError('');
     setRetirarVariantIdx(product?.variantes?.length === 1 ? '0' : '');
   };
 
@@ -229,14 +292,15 @@ const Productos = () => {
       return;
     }
     const cantidad = Number(retirarCantidad);
-    if (!Number.isInteger(cantidad) || cantidad < 1) {
-      alert({ icon: 'warning', title: 'Cantidad inválida', message: 'Debe ingresar al menos 1 unidad' });
+    if (!Number.isInteger(cantidad) || cantidad < CANTIDAD.min || cantidad > CANTIDAD.max) {
+      setRetirarError(`La cantidad debe estar entre ${CANTIDAD.min} y ${CANTIDAD.max}`);
       return;
     }
     if (retirarDisponible != null && cantidad > retirarDisponible) {
-      alert({ icon: 'warning', title: 'Stock insuficiente', message: `Solo hay ${retirarDisponible} unidad(es) en salón` });
+      setRetirarError(`Solo hay ${retirarDisponible} unidad(es) en salón`);
       return;
     }
+    setRetirarError('');
     setRetirarSaving(true);
     try {
       await retirarStock(retirarModal._id, { cantidad, talle: retirarVariant?.talle || '', color: retirarVariant?.color || '' });
@@ -287,44 +351,84 @@ const Productos = () => {
     setReturnPicker(null);
   };
 
-  const agregarAlCarritoEscaneado = (producto) => {
-    if (producto.variantes?.length > 0) {
+  const agregarAlCarritoEscaneado = (producto, varianteEscaneada = null) => {
+    const norm = (v) => String(v ?? '').trim().toLowerCase();
+    let variante = varianteEscaneada;
+    if (!variante && producto.variantes?.length > 0) {
+      const conStock = producto.variantes.filter((v) => (Number(v.cantidad) || 0) > 0);
+      if (conStock.length === 1) {
+        variante = { talle: conStock[0].talle || '', color: conStock[0].color || '' };
+      } else {
+        setScannerOpen(false);
+        openQuickAdd(producto);
+        return;
+      }
+    }
+
+    const infoVariante = variante
+      ? producto.variantes?.find(
+          (v) => norm(v.talle) === norm(variante.talle) && norm(v.color) === norm(variante.color)
+        )
+      : null;
+    if (variante && !infoVariante) {
       setScannerOpen(false);
       openQuickAdd(producto);
       return;
     }
-    const stock = Number(producto.cantidad) || 0;
+
+    const talle = infoVariante?.talle ?? '';
+    const color = infoVariante?.color ?? '';
+    const stock = Number(infoVariante ? infoVariante.cantidad : producto.cantidad) || 0;
+    const detalleVariante = [talle, color].filter(Boolean).join(' / ');
     if (stock < 1) {
-      alert({ icon: 'warning', title: 'Sin stock', message: `${producto.nombre} no tiene unidades disponibles` });
+      alert({
+        icon: 'warning',
+        title: 'Sin stock',
+        message: `${producto.nombre}${detalleVariante ? ` (${detalleVariante})` : ''} no tiene unidades disponibles`,
+      });
       return;
     }
-    const actual = cart.find((i) => i.producto === producto._id && !i.talle && !i.color);
+    const actual = cart.find((i) => i.producto === producto._id && (i.talle || '') === talle && (i.color || '') === color);
     if (Number(actual?.cantidad || 0) + 1 > stock) {
-      alert({ icon: 'warning', title: 'Stock insuficiente', message: `Solo hay ${stock} unidad(es) de ${producto.nombre}` });
+      alert({
+        icon: 'warning',
+        title: 'Stock insuficiente',
+        message: `Solo hay ${stock} unidad(es) de ${producto.nombre}${detalleVariante ? ` (${detalleVariante})` : ''}`,
+      });
       return;
     }
     addItem({
       producto: producto._id,
       nombre: producto.nombre,
-      precio: producto.precio,
+      precio: precioVigente(producto),
+      precioOriginal: tieneOferta(producto) ? Number(producto.precio) : undefined,
       cantidad: 1,
-      talle: '',
-      color: '',
+      talle,
+      color,
+      codigo: infoVariante?.codigo || '',
+    }, { reveal: true });
+    toast({
+      message: `Agregado: ${producto.nombre}${detalleVariante ? ` (${detalleVariante})` : ''}`,
+      duration: 1400,
     });
-    toast({ message: `Agregado: ${producto.nombre}`, duration: 1400 });
   };
 
   const manejarCodigoEscaneado = async (codigo) => {
+    const ahora = Date.now();
+    if (codigo === ultimoEscaneoRef.current.codigo && ahora - ultimoEscaneoRef.current.ts < 800) return;
+    ultimoEscaneoRef.current = { codigo, ts: ahora };
     try {
       const { data: producto } = await obtenerProductoPorCodigo(codigo);
       setSearch('');
-      if (cart.length > 0) {
-        agregarAlCarritoEscaneado(producto);
+      agregarAlCarritoEscaneado(producto, producto.variante || null);
+    } catch (err) {
+      if (err.response?.status === 410 || err.response?.data?.code === 'EN_PAPELERA') {
+        toast({
+          message: err.response?.data?.message || 'El producto está en la papelera. Restauralo para venderlo.',
+          duration: 3200,
+        });
         return;
       }
-      setScannerOpen(false);
-      openQuickAdd(producto);
-    } catch (err) {
       if (err.response?.status === 404) {
         if (!esAdmin) {
           toast({
@@ -350,6 +454,12 @@ const Productos = () => {
 
   useLector(manejarCodigoEscaneado, !returnPicker && !returnSale && !retirarModal && !quickAdd);
 
+  useEffect(() => {
+    if (!lastAdded) return;
+    const visibles = [...document.querySelectorAll('[data-item-resaltado="true"]')];
+    visibles.find((el) => el.offsetParent !== null)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [lastAdded]);
+
   const renderVariantSelect = (variants, value, onChange, label = 'Variante') => {
     if (!variants?.length) return null;
     return (
@@ -357,7 +467,7 @@ const Productos = () => {
         <IosSelect value={value} onChange={(e) => onChange(e.target.value)}>
           <option value="" className="bg-ios-surface2">Seleccionar...</option>
           {variants.map((v, i) => (
-            <option key={i} value={String(i)} className="bg-ios-surface2">{variantLabel(v)}</option>
+            <option key={i} value={String(i)} className="bg-ios-surface2">{variantLabel(v)} · {v.codigo || 'sin código'}</option>
           ))}
         </IosSelect>
       </IosField>
@@ -378,7 +488,7 @@ const Productos = () => {
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
         <h1 className="text-[28px] font-bold text-ios-label tracking-tight">Productos</h1>
-        <div className="flex items-center gap-2.5 w-full sm:w-auto">
+        <div className="flex items-center gap-2.5 flex-wrap w-full sm:w-auto">
           <IosButton variant="tinted" onClick={openCart} className="md:hidden flex-1 sm:flex-none relative">
             <IconCart className="w-[18px] h-[18px]" />
             Carrito
@@ -400,7 +510,7 @@ const Productos = () => {
         />
         <ScannerButton
           onClick={() => {
-            setScannerContinuo(false);
+            setScannerContinuo(true);
             setScannerOpen(true);
           }}
           title="Escanear producto"
@@ -412,7 +522,7 @@ const Productos = () => {
           <div className="relative shrink-0">
             <button
               onClick={() => setLowStockOpen(!lowStockOpen)}
-              className="ios-btn-press flex items-center gap-2 px-3.5 py-2 bg-ios-red/10 border border-ios-red/25 rounded-ios-pill text-sm text-ios-red font-semibold hover:bg-ios-red/15 transition-all"
+              className="btn-vivo btn-vivo-rojo flex items-center gap-2 px-3.5 py-2 rounded-ios-pill text-sm font-semibold"
             >
               <IconAlert className="w-4 h-4 shrink-0" strokeWidth={1.9} />
               <span className="text-xs font-semibold whitespace-nowrap">
@@ -449,11 +559,11 @@ const Productos = () => {
                         )}
                       </div>
                       <div className="flex flex-col items-end gap-1 shrink-0">
-                        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-ios-orange/15 text-ios-orange whitespace-nowrap">
+                        <span className="inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-bold bg-ios-orange/15 text-ios-orange whitespace-nowrap">
                           Quedan {item.cantidad}
                         </span>
                         <span
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${
+                          className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${
                             item.deposito > 0 ? 'bg-ios-surface2 text-ios-tertiary' : 'bg-ios-surface2/60 text-ios-tertiary opacity-60'
                           }`}
                         >
@@ -483,11 +593,11 @@ const Productos = () => {
                         )}
                       </div>
                       <div className="flex flex-col items-end gap-1 shrink-0">
-                        <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-ios-red/15 text-ios-red whitespace-nowrap">
+                        <span className="inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-bold bg-ios-red/15 text-ios-red whitespace-nowrap">
                           AGOTADO
                         </span>
                         <span
-                          className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${
+                          className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${
                             item.deposito > 0 ? 'bg-ios-surface2 text-ios-tertiary' : 'bg-ios-surface2/60 text-ios-tertiary opacity-60'
                           }`}
                         >
@@ -510,6 +620,8 @@ const Productos = () => {
         className="mb-4"
       />
 
+      <AvisoPromociones onExpirar={recargarProductos} className="mb-4" />
+
       <IosModal
         open={!!quickAdd}
         onClose={() => setQuickAdd(null)}
@@ -520,19 +632,34 @@ const Productos = () => {
       >
         <p className="text-ios-secondary text-sm mb-4 font-medium">{quickAdd?.nombre}</p>
         <div className="space-y-4">
-          <IosField label="Cantidad">
+          <IosField label="Cantidad" error={qaError}>
             <IosInput
               type="text" inputMode="numeric"
+              maxLength={6}
+              invalid={Boolean(qaError)}
               value={qaCantidad}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v === '' || /^\d+$/.test(v)) setQaCantidad(v);
+                if ((v === '' || /^\d+$/.test(v)) && (v === '' || Number(v) <= CANTIDAD.max)) {
+                  setQaError('');
+                  setQaCantidad(v);
+                }
               }}
             />
           </IosField>
           <IosField label="Precio unitario">
             <div className="px-3.5 py-2.5 bg-ios-surface2 rounded-ios-control text-ios-label text-sm font-medium">
-              {formatMoney(quickAdd?.precio)}
+              {tieneOferta(quickAdd) ? (
+                <>
+                  <span className="text-ios-tertiary line-through mr-1.5">{formatMoney(quickAdd?.precio)}</span>
+                  <span className="text-ios-orange font-semibold">{formatMoney(precioVigente(quickAdd))}</span>
+                  <span className="ml-1.5 inline-flex items-center justify-center leading-none px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-ios-orange/15 text-ios-orange">
+                    {etiquetaOferta(quickAdd.oferta)}
+                  </span>
+                </>
+              ) : (
+                formatMoney(quickAdd?.precio)
+              )}
             </div>
           </IosField>
           {renderVariantSelect(quickAdd?.variantes, qaVariantIdx, setQaVariantIdx)}
@@ -551,29 +678,18 @@ const Productos = () => {
           confirmDisabled={sellSaving || !caja || !esDeHoy}
           maxWidth="max-w-2xl"
         >
-        {!caja && cierreHoy && (
+        {!caja && diaCompleto && (
           <div className="mb-3 rounded-2xl px-3.5 py-3 bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs leading-relaxed">
-            La caja está cerrada.
-            {esAdmin ? (
-              <button
-                type="button"
-                onClick={openReabrir}
-                className="mt-2 w-full py-2 rounded-ios-control bg-amber-500/20 font-bold hover:bg-amber-500/30 transition-colors"
-              >
-                Reabrir caja
-              </button>
-            ) : (
-              <p className="mt-1 text-amber-200/80">Solo el administrador puede reabrirla.</p>
-            )}
+            La caja está cerrada. El día ya fue cerrado.
           </div>
         )}
-        {!caja && !cierreHoy && (
+        {!caja && !diaCompleto && (
           <div className="mb-3 rounded-2xl px-3.5 py-3 bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs leading-relaxed">
             La caja está cerrada. Abrila para poder vender.
             <button
               type="button"
               onClick={openAbrir}
-              className="mt-2 w-full py-2 rounded-ios-control bg-amber-500/20 font-bold hover:bg-amber-500/30 transition-colors"
+              className="mt-2 w-full py-2 rounded-ios-control btn-vivo btn-vivo-ambar font-bold"
             >
               Abrir caja
             </button>
@@ -594,62 +710,74 @@ const Productos = () => {
               setScannerContinuo(true);
               setScannerOpen(true);
             }}
-            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-ios-control bg-ios-surface2 text-ios-secondary text-xs font-medium hover:bg-ios-surface3 transition-colors"
+            className="shrink-0 btn-vivo btn-vivo-verde inline-flex items-center gap-1.5 px-3 py-1.5 rounded-ios-control text-xs font-semibold"
           >
             <IconCamera className="w-3.5 h-3.5" />
             Escanear
           </button>
         </div>
         <div className="space-y-2 mb-4">
-          {cart.map((item, idx) => (
+          {cart.map((item, idx) => {
+            const resaltado = lastAdded?.key === claveItemCarrito(item);
+            return (
             <div
               key={`${item.producto}|${item.talle || ''}|${item.color || ''}`}
-              className="flex flex-col sm:flex-row sm:items-center gap-3 bg-ios-surface rounded-2xl p-3 border border-ios-separator/30"
+              data-item-resaltado={resaltado ? 'true' : undefined}
+              className={`flex flex-col sm:flex-row sm:items-center gap-3 bg-ios-surface rounded-2xl p-3 border transition-all duration-500 ${
+                resaltado ? 'border-ios-green/60 ring-2 ring-ios-green/40 bg-ios-green/10 animate-ios-scan' : 'border-ios-separator/30'
+              }`}
             >
               <div className="flex-1 min-w-0 flex items-start justify-between gap-2 sm:block">
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-ios-label truncate">{item.nombre}</p>
-                  {(item.talle || item.color) && (
+                  {(item.talle || item.color || item.codigo) && (
                     <p className="text-xs text-ios-tertiary mt-0.5">
                       {item.talle && <span className="text-ios-secondary">Talle: {item.talle}</span>}
                       {item.talle && item.color && <span className="text-ios-tertiary"> | </span>}
                       {item.color && <span className="text-ios-secondary">Color: {item.color}</span>}
+                      {(item.talle || item.color) && item.codigo && <span className="text-ios-tertiary"> | </span>}
+                      {item.codigo && <span className="text-ios-secondary">Código: {item.codigo}</span>}
                     </p>
                   )}
                 </div>
                 <button
                   onClick={() => removeFromCart(idx)}
-                  className="text-ios-red p-1 sm:hidden shrink-0"
+                  className="btn-icono btn-icono-rojo p-1 sm:hidden shrink-0"
                 >
                   <IconX className="w-5 h-5" />
                 </button>
               </div>
-              <div className="flex items-center gap-2 sm:ml-auto shrink-0 w-full sm:w-auto">
+              <div className="flex flex-wrap items-center gap-2 sm:ml-auto w-full sm:w-auto">
                 <input
                   type="text" inputMode="numeric"
+                  maxLength={6}
                   value={item.cantidad}
                   onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === '' || /^\d+$/.test(v)) updateCartItem(idx, 'cantidad', v);
+                    const v = limitarTexto(e.target.value, 6);
+                    if (v === '' || (/^\d+$/.test(v) && Number(v) <= CANTIDAD.max)) updateCartItem(idx, 'cantidad', v);
                   }}
-                  className="w-16 px-2 py-1.5 text-center bg-ios-surface2 rounded-lg text-ios-label text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  className="w-14 sm:w-16 px-2 py-1.5 text-center bg-ios-surface2 rounded-lg text-ios-label text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                 />
                 <span className="text-ios-tertiary">×</span>
-                <span className="w-24 px-2 py-1.5 text-right text-ios-label text-sm font-medium">
+                <span className="w-20 sm:w-24 px-2 py-1.5 text-right text-ios-label text-sm font-medium truncate">
+                  {item.precioOriginal ? (
+                    <span className="text-ios-tertiary line-through mr-1 text-xs">{formatMoney(item.precioOriginal)}</span>
+                  ) : null}
                   {formatMoney(item.precio)}
                 </span>
-                <span className="text-ios-tertiary text-xs font-medium w-20 text-right">
+                <span className="w-16 sm:w-20 text-ios-tertiary text-xs font-medium text-right truncate">
                   {formatMoney(item.precio * (Number(item.cantidad) || 0))}
                 </span>
                 <button
                   onClick={() => removeFromCart(idx)}
-                  className="text-ios-red p-1 hidden sm:block"
+                  className="btn-icono btn-icono-rojo p-1 hidden sm:block"
                 >
                   <IconTrash className="w-4 h-4" />
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="border-t border-ios-separator/40 pt-4 space-y-3 mb-4">
@@ -662,6 +790,7 @@ const Productos = () => {
             <IosField label="Descuento">
               <IosInput
                 type="text" inputMode="numeric"
+                maxLength={3}
                 value={sellDescuento}
                 onChange={(e) => {
                   const v = e.target.value;
@@ -674,27 +803,27 @@ const Productos = () => {
 
           <div className="bg-ios-surface rounded-2xl border border-ios-separator/30 p-4 space-y-3">
             <p className="text-[13px] text-ios-secondary font-medium">Pago</p>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {metodos.map((m) => (
                 <button
                   key={m.key} type="button"
                   onClick={() => setMetodoPago(m.key)}
-                  className={`flex-1 px-3 py-2 text-sm rounded-ios-control border transition-all ios-btn-press font-medium ${
+                  className={`px-3 py-2 text-sm rounded-ios-control transition-all duration-150 font-medium ${
                     sellMetodoPago === m.key
                       ? m.activeCls
-                      : 'bg-ios-surface2 text-ios-tertiary border-transparent hover:bg-ios-surface3'
+                      : 'bg-ios-surface3 text-ios-tertiary border-transparent hover:bg-ios-separator/40 dark:bg-ios-surface2 dark:hover:bg-ios-surface3'
                   }`}
                 >
                   {m.label}
                 </button>
               ))}
             </div>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <label className="flex items-center gap-2.5 cursor-pointer select-none">
                 <IosToggle checked={sellSplit} onChange={toggleSplit} />
                 <span className="text-sm text-ios-secondary font-medium">Dividir pago</span>
               </label>
-              <span className="text-sm text-ios-tertiary">
+              <span className="text-sm text-ios-tertiary min-w-0 truncate">
                 Monto: <span className="text-ios-label font-semibold">{formatMoney(sellMonto1)}</span>
               </span>
             </div>
@@ -713,9 +842,10 @@ const Productos = () => {
                   <span className="text-sm text-ios-tertiary font-mono">$</span>
                   <input
                     type="text" inputMode="numeric"
+                    maxLength={12}
                     value={sellMonto2}
                     onChange={(e) => {
-                      const v = e.target.value;
+                      const v = limitarTexto(e.target.value, 12);
                       if (v === '' || /^\d*\.?\d{0,2}$/.test(v)) setSellMonto2(v);
                     }}
                     className="w-24 sm:w-28 px-3 py-2.5 bg-ios-surface2 rounded-ios-control text-ios-label text-sm text-right focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -723,6 +853,7 @@ const Productos = () => {
                 </div>
               </div>
             )}
+            <PlanCuentaCorriente />
           </div>
         </div>
 
@@ -766,13 +897,18 @@ const Productos = () => {
         </p>
         <div className="space-y-4">
           {renderVariantSelect(retirarVariants, retirarVariantIdx, setRetirarVariantIdx)}
-          <IosField label="Unidades a retirar" hint={`Disponible en salón: ${retirarDisponible ?? '—'}`}>
+          <IosField label="Unidades a retirar" hint={`Disponible en salón: ${retirarDisponible ?? '—'}`} error={retirarError}>
             <IosInput
               type="text" inputMode="numeric"
+              maxLength={6}
+              invalid={Boolean(retirarError)}
               value={retirarCantidad}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v === '' || /^\d+$/.test(v)) setRetirarCantidad(v);
+                if ((v === '' || /^\d+$/.test(v)) && (v === '' || Number(v) <= CANTIDAD.max)) {
+                  setRetirarError('');
+                  setRetirarCantidad(v);
+                }
               }}
             />
           </IosField>
@@ -849,12 +985,6 @@ const Productos = () => {
         </div>
       )}
 
-      {topeAlcanzado && !search && (
-        <div className="mb-4 px-4 py-3 bg-amber-500/10 border border-amber-500/25 rounded-ios-control text-amber-300 text-sm font-medium">
-          Se muestran los primeros {LIMITE_PRODUCTOS} productos. Usá la búsqueda para encontrar el resto.
-        </div>
-      )}
-
       {loading ? (
         <LoadingSpinner />
       ) : (
@@ -864,8 +994,9 @@ const Productos = () => {
               <tr>
                 <th className="text-left px-5 py-3 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Nombre</th>
                 <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Detalle</th>
-                <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Precio</th>
+                <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Código</th>
                 <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Total</th>
+                <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Precio</th>
                 <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Categoría</th>
                 <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Proveedor</th>
                 <th className="text-right px-5 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Acciones</th>
@@ -874,7 +1005,7 @@ const Productos = () => {
             <tbody>
               {products.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-14 text-ios-tertiary text-sm">
+                  <td colSpan={8} className="text-center py-14 text-ios-tertiary text-sm">
                     <div className="flex flex-col items-center gap-2">
                       <IconBox className="w-8 h-8 text-ios-tertiary" strokeWidth={1.5} />
                       <span>{error || (categoriaActiva ? `No hay productos en "${categoriaActiva}"` : 'No hay productos')}</span>
@@ -904,32 +1035,18 @@ const Productos = () => {
                         <span className="block text-[11px] font-normal text-ios-tertiary mt-0.5">Código: {p.codigo}</span>
                       )}
                     </td>
-                    <td className="px-4 py-3.5">
+                    <td className="px-4 py-3.5 align-top">
                       {expandedId === p._id ? (
                         <div className="text-xs leading-relaxed space-y-0.5 animate-slideDown">
-                          {p.colores?.length > 0
-                            ? p.colores.map((color) => {
-                                const vars = (p.variantes || []).filter((v) => v.color === color);
-                                return (
-                                  <div key={color}>
-                                    <span className="font-semibold text-ios-secondary">{color}: </span>
-                                    {vars.length > 0
-                                      ? vars.map((v, i) => (
-                                          <span key={i} className="text-ios-tertiary">
-                                            {v.talle}({v.cantidad}){v.deposito ? ` dep:${v.deposito}` : ''}{i < vars.length - 1 ? ' · ' : ''}
-                                          </span>
-                                        ))
-                                      : <span className="text-ios-tertiary">—</span>}
-                                  </div>
-                                );
-                              })
-                            : p.variantes?.length > 0
-                              ? p.variantes.map((v, i) => (
-                                  <span key={i} className="text-ios-tertiary">
-                                    {variantShortLabel(v)}:{v.cantidad}{v.deposito ? ` (dep ${v.deposito})` : ''}{i < p.variantes.length - 1 ? ', ' : ''}
-                                  </span>
-                                ))
-                              : <span className="text-ios-tertiary">—</span>}
+                          {filasDetalle(p).length > 0 ? (
+                            filasDetalle(p).map((fila, i) => (
+                              fila.tipo === 'color'
+                                ? <div key={i} className="font-semibold text-ios-secondary">{fila.texto}:</div>
+                                : <div key={i} className="text-ios-tertiary pl-2">{fila.tipo === 'vacio' ? '—' : fila.detalle}</div>
+                            ))
+                          ) : (
+                            <div className="text-ios-tertiary">—</div>
+                          )}
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 text-xs">
@@ -956,8 +1073,16 @@ const Productos = () => {
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3.5 text-ios-secondary">
-                      {p.precio != null ? formatMoney(p.precio) : '—'}
+                    <td className="px-4 py-3.5 align-top">
+                      {expandedId === p._id && filasDetalle(p).length > 0 && (
+                        <div className="text-xs leading-relaxed space-y-0.5 animate-slideDown">
+                          {filasDetalle(p).map((fila, i) => (
+                            <div key={i} className={fila.tipo === 'variante' ? 'text-ios-tertiary tabular-nums pl-2' : 'pl-2'}>
+                              {fila.tipo === 'variante' ? (fila.codigo || 'sin código') : '\u00A0'}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3.5">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -968,7 +1093,7 @@ const Productos = () => {
                           {p.cantidad}
                         </span>
                         {soloEnDeposito(p) && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-500/15 text-violet-300 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300 whitespace-nowrap">
                             <IconWarehouse className="w-3 h-3" strokeWidth={2} />
                             Solo en depósito
                           </span>
@@ -976,12 +1101,28 @@ const Productos = () => {
                       </div>
                       <span className="block text-[11px] text-ios-tertiary mt-0.5">Dep: {depositoTotal(p)}</span>
                     </td>
+                    <td className="px-4 py-3.5">
+                      {p.precio == null ? (
+                        '—'
+                      ) : tieneOferta(p) ? (
+                        <div className="leading-tight">
+                          <span className="block text-[11px] text-ios-tertiary line-through">{formatMoney(p.precio)}</span>
+                          <span className="text-ios-orange font-semibold">{formatMoney(precioVigente(p))}</span>
+                          <span className="ml-1.5 inline-flex items-center justify-center leading-none px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-ios-orange/15 text-ios-orange">
+                            {etiquetaOferta(p.oferta)}
+                          </span>
+                          <span className="block text-[10px] text-ios-tertiary mt-0.5">Hasta {formatDate(p.oferta.hasta)}</span>
+                        </div>
+                      ) : (
+                        <span className="text-ios-secondary">{formatMoney(p.precio)}</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3.5 text-ios-tertiary">{p.categoria}</td>
-                    <td className="px-4 py-3.5 text-ios-tertiary">{p.proveedor || '—'}</td>
+                    <td className="px-4 py-3.5 text-ios-tertiary">{p.proveedor || 'sin proveedor'}</td>
                     <td className="px-5 py-3.5 text-right">
                       <button
                         onClick={(e) => toggleDropdown(e, p)}
-                        className="p-2 rounded-full hover:bg-ios-hover/10 text-ios-secondary transition-colors"
+                        className="p-2 btn-icono btn-icono-gris"
                         aria-label={`Acciones de ${p.nombre}`}
                         aria-haspopup="menu"
                         aria-expanded={dropdown.product?._id === p._id}
@@ -1022,28 +1163,28 @@ const Productos = () => {
                     <p className="font-semibold text-ios-label">{p.nombre}</p>
                     <p className="text-xs text-ios-tertiary mt-0.5">
                       {p.categoria}
-                      {p.proveedor ? ` · ${p.proveedor}` : ''}
+                      {p.proveedor ? ` · ${p.proveedor}` : ' · sin proveedor'}
                     </p>
                     {p.codigo && (
                       <p className="text-[11px] text-ios-tertiary mt-0.5">Código: {p.codigo}</p>
                     )}
                     {soloEnDeposito(p) && (
-                      <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-500/15 text-violet-300">
+                      <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">
                         <IconWarehouse className="w-3 h-3" strokeWidth={2} />
                         Solo en depósito
                       </span>
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${tieneStockBajo(p) ? 'bg-ios-red/15 text-ios-red' : 'bg-ios-surface2 text-ios-secondary'}`}>
+                    <span className={`inline-flex items-center justify-center gap-1.5 leading-none px-2.5 py-1 rounded-full text-xs font-semibold ${tieneStockBajo(p) ? 'bg-ios-red/15 text-ios-red' : 'bg-ios-surface2 text-ios-secondary'}`}>
                       {p.cantidad}
                     </span>
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-violet-500/15 text-violet-300">
+                    <span className="inline-flex items-center justify-center gap-1.5 leading-none px-2.5 py-1 rounded-full text-xs font-semibold bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">
                       Dep {depositoTotal(p)}
                     </span>
                     <button
                       onClick={(e) => toggleDropdown(e, p)}
-                      className="p-2 rounded-full hover:bg-ios-hover/10 text-ios-secondary transition-colors"
+                      className="p-2 btn-icono btn-icono-gris"
                     >
                       <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
                         <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
@@ -1056,7 +1197,19 @@ const Productos = () => {
                   className="w-full flex items-center justify-between mt-3 text-left"
                 >
                   <span className="text-ios-secondary font-medium">
-                    {p.precio != null ? formatMoney(p.precio) : '—'}
+                    {p.precio == null ? (
+                      '—'
+                    ) : tieneOferta(p) ? (
+                      <>
+                        <span className="text-ios-tertiary line-through mr-1.5">{formatMoney(p.precio)}</span>
+                        <span className="text-ios-orange font-semibold">{formatMoney(precioVigente(p))}</span>
+                        <span className="ml-1.5 inline-flex items-center justify-center leading-none px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-ios-orange/15 text-ios-orange">
+                          {etiquetaOferta(p.oferta)}
+                        </span>
+                      </>
+                    ) : (
+                      formatMoney(p.precio)
+                    )}
                   </span>
                   <span className="flex items-center gap-1.5 text-xs text-ios-tertiary">
                     {p.colores?.length > 0
@@ -1068,36 +1221,52 @@ const Productos = () => {
                   </span>
                 </button>
                 {expandedId === p._id && (
-                  <div className="mt-3 pt-3 border-t border-ios-separator/40 text-xs leading-relaxed space-y-1 animate-slideDown">
-                    {p.colores?.length > 0
-                      ? p.colores.map((color) => {
-                          const vars = (p.variantes || []).filter((v) => v.color === color);
-                          return (
-                            <div key={color}>
-                              <span className="font-semibold text-ios-secondary">{color}: </span>
-                              {vars.length > 0
-                                ? vars.map((v, i) => (
-                                    <span key={i} className="text-ios-tertiary">
-                                      {v.talle}({v.cantidad}){v.deposito ? ` dep:${v.deposito}` : ''}{i < vars.length - 1 ? ' · ' : ''}
-                                    </span>
-                                  ))
-                                : <span className="text-ios-tertiary">—</span>}
-                            </div>
-                          );
-                        })
-                      : p.variantes?.length > 0
-                        ? p.variantes.map((v, i) => (
-                            <span key={i} className="text-ios-tertiary">
-                              {variantShortLabel(v)}:{v.cantidad}{v.deposito ? ` (dep ${v.deposito})` : ''}{i < p.variantes.length - 1 ? ', ' : ''}
-                            </span>
-                          ))
-                        : <span className="text-ios-tertiary">—</span>}
+                  <div className="mt-3 pt-3 border-t border-ios-separator/40 text-xs leading-relaxed space-y-2 animate-slideDown">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-ios-tertiary font-semibold mb-0.5">Detalle</p>
+                      {p.variantes?.length > 0 ? (
+                        <div className="space-y-0.5">
+                          {filasDetalle(p).map((fila, i) => (
+                            fila.tipo === 'color'
+                              ? <div key={i} className="font-semibold text-ios-secondary">{fila.texto}:</div>
+                              : <div key={i} className="text-ios-tertiary pl-2">{fila.tipo === 'vacio' ? '—' : fila.detalle}</div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-ios-tertiary">—</p>
+                      )}
+                    </div>
+                    {p.variantes?.length > 0 && (
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-ios-tertiary font-semibold mb-0.5">Código</p>
+                        <div className="space-y-0.5">
+                          {p.variantes.map((v, i) => (
+                            <div key={i} className="text-ios-tertiary tabular-nums">{v.codigo || 'sin código'}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
             ))
           )}
         </div>
+      )}
+
+      {totalProductos > 0 && (
+        <Paginacion
+          pagina={pagina}
+          porPagina={porPagina}
+          total={totalProductos}
+          onPagina={setPagina}
+          onPorPagina={(n) => {
+            setPorPagina(n);
+            setPagina(1);
+          }}
+          deshabilitado={loading}
+          className="mt-4"
+        />
       )}
 
       {dropdown.product && (
@@ -1150,6 +1319,7 @@ const Productos = () => {
           </div>
         </>
       )}
+
     </div>
   );
 };

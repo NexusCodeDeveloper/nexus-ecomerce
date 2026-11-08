@@ -2,17 +2,28 @@ import mongoose from 'mongoose';
 import Venta from './VentaModel.js';
 import Producto from '../Producto/ProductoModel.js';
 import Devolucion from '../Devolucion/DevolucionModel.js';
+import Cliente from '../Cliente/ClienteModel.js';
 import CierreCaja from './CierreCajaModel.js';
 import RetiroCaja from '../RetiroCaja/RetiroCajaModel.js';
 import RetiroCajaDia from '../RetiroCaja/RetiroCajaDiaModel.js';
-import { schemaCrearVenta, schemaAbrirCaja, schemaCerrarCaja, schemaReabrirCaja } from './VentaSchema.js';
+import { schemaCrearVenta, schemaAbrirCaja, schemaCerrarCaja, schemaReenviarReporteDia } from './VentaSchema.js';
 import { generarTicketNumero, guardarConTicketUnico } from './TicketUtils.js';
+import { montoEnCuentaCorriente, registrarDebitoDeVenta, cobrosDeCuentaCorriente } from '../MovimientoCuentaCorriente/CuentaCorrienteService.js';
+import {
+  resolverPlanDeVenta,
+  crearPlanDeVenta,
+  cancelarCuotasDeVenta,
+  anularCargosDeVenta,
+  recalcularImputacionesCliente,
+} from '../CuotaCuentaCorriente/CuotasService.js';
 import { enviarCierreDeCaja, enviarCorreoPrueba, verificarCorreo } from '../../services/CorreoService.js';
 import { enviarEvento, enviarStockBajo } from '../../services/PushService.js';
 import { enSegundoPlano } from '../../utils/TareasUtils.js';
 import { parsearFecha, obtenerRango, inicioDeDia } from '../../utils/FechasUtils.js';
 import { indiceDeVariante, extraDeposito } from '../../utils/VariantesUtils.js';
-import { obtenerArticulos, unidadesNetasVenta, totalNetoVenta } from '../../utils/VentasUtils.js';
+import { obtenerArticulos, unidadesNetasVenta, totalNetoVenta, resumirPorMetodo, rankingEmpleados, rankingProductosPorUnidades, construirEje } from '../../utils/VentasUtils.js';
+import { promocionesVigentes } from '../Promocion/PromocionService.js';
+import { precioVigentePesos } from '../../utils/PreciosUtils.js';
 import { filtroCierreDia, mensajeCierre, verificarOperacionNoEnCierre, MENSAJE_CIERRE_EN_CURSO } from '../../utils/CierresUtils.js';
 import { buscarCajaAbierta, respuestaSinCaja, MENSAJE_SIN_CAJA, cajaEsDeHoy, mensajeCajaAnterior } from '../../utils/CajaUtils.js';
 import { filtroTienda, idTienda, conTienda } from '../../utils/TenantUtils.js';
@@ -20,6 +31,46 @@ import logger from '../../utils/LoggerUtils.js';
 
 const escaparRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const redondear = (valor) => Math.round((Number(valor) || 0) * 100) / 100;
+
+const ETIQUETAS_METODO_PAGO = {
+  efectivo: 'Efectivo',
+  transferencia: 'Transferencia',
+  tarjeta: 'Tarjeta',
+  cuentaCorriente: 'Cuenta corriente',
+};
+
+const resumenPagos = (pagos = []) =>
+  [...new Set(
+    pagos
+      .map((pago) => ETIQUETAS_METODO_PAGO[pago.metodo] || pago.metodo)
+      .filter(Boolean)
+  )].join(' + ');
+
+/** Push nativo para los admins cuando la venta la hizo un empleado. No persiste ningún aviso. */
+export const construirEventoVentaEmpleado = (venta, usuario) => {
+  if (!venta || usuario?.rol !== 'user') return null;
+  const unidades = (venta.articulos || []).reduce(
+    (total, item) => total + (Number(item.cantidad) || 0),
+    0
+  );
+  const total = Number(venta.total) || 0;
+  const partes = [
+    `Ticket ${venta.ticketNumero || '—'}`,
+    unidades === 1 ? '1 unidad' : `${unidades} unidades`,
+    `$${total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+  ];
+  if (venta.clienteNombre) partes.push(`Cliente: ${venta.clienteNombre}`);
+  const pagos = resumenPagos(venta.pagos);
+  if (pagos) partes.push(`Pago: ${pagos}`);
+
+  return {
+    tipo: 'venta',
+    titulo: `Nueva venta de ${usuario.nombre}`,
+    mensaje: `${partes.join(' · ')}.`,
+    url: '/ventas',
+    para: 'admins',
+  };
+};
 
 export const crearVenta = async (req, res, next) => {
   let session;
@@ -44,12 +95,20 @@ export const crearVenta = async (req, res, next) => {
     const idsProductos = data.articulos.map((item) => item.producto);
     const productos = await Producto.find(filtroTienda(req, { _id: { $in: idsProductos } })).session(session);
     const productosPorId = new Map(productos.map((p) => [p._id.toString(), p]));
+    const promociones = await promocionesVigentes();
 
     for (const item of data.articulos) {
       const product = productosPorId.get(String(item.producto));
       if (!product) {
         await session.abortTransaction();
         return res.status(404).json({ message: `Producto ${item.producto} no encontrado` });
+      }
+      if (product.enPapelera) {
+        await session.abortTransaction();
+        return res.status(409).json({
+          message: `"${product.nombre}" está en la papelera y ya no se puede vender. Restauralo desde la papelera o quitalo del carrito.`,
+          code: 'EN_PAPELERA',
+        });
       }
       productosVendidos.push(product);
 
@@ -79,9 +138,11 @@ export const crearVenta = async (req, res, next) => {
 
       await product.save({ session });
 
-      const precioUnitario = Math.round(product.precio * 100) / 100;
+      const precioUnitario = Math.round(precioVigentePesos(product, promociones) * 100) / 100;
       articulos.push({
         producto: item.producto,
+        nombre: product.nombre || '',
+        codigo: product.codigo || '',
         cantidad: item.cantidad,
         precio: precioUnitario,
         talle: item.talle || '',
@@ -101,6 +162,22 @@ export const crearVenta = async (req, res, next) => {
       });
     }
 
+    const totalEnCuentaCorriente = montoEnCuentaCorriente(data.pagos);
+    let cliente = null;
+    let plan = null;
+    if (totalEnCuentaCorriente > 0) {
+      if (!data.cliente) {
+        await session.abortTransaction();
+        return res.status(400).json({ message: 'Para cargar a la cuenta corriente indicá el cliente' });
+      }
+      cliente = await Cliente.findById(data.cliente).session(session);
+      if (!cliente) {
+        await session.abortTransaction();
+        return res.status(404).json({ message: 'Cliente no encontrado' });
+      }
+      plan = await resolverPlanDeVenta(data.planCuotas, { offset: Number(data.offset) || 0 });
+    }
+
     const venta = await Venta.create([{
       ...(tienda ? { tienda } : {}),
       articulos,
@@ -108,9 +185,29 @@ export const crearVenta = async (req, res, next) => {
       empleado: req.usuario.nombre,
       pagos: data.pagos,
       descuento: data.descuento || 0,
+      cliente: cliente ? cliente._id : undefined,
+      clienteNombre: cliente ? cliente.nombre : '',
     }], { session });
 
     const savedSale = await guardarConTicketUnico(venta[0], session);
+
+    if (cliente) {
+      await registrarDebitoDeVenta(session, {
+        cliente,
+        clienteNombre: cliente.nombre,
+        monto: totalEnCuentaCorriente,
+        venta: savedSale,
+        usuario: req.usuario,
+      });
+      await crearPlanDeVenta(session, {
+        cliente,
+        clienteNombre: cliente.nombre,
+        venta: savedSale,
+        montoBase: totalEnCuentaCorriente,
+        plan,
+        usuario: req.usuario,
+      });
+    }
 
     const populated = await Venta.findById(savedSale._id)
       .session(session)
@@ -119,11 +216,14 @@ export const crearVenta = async (req, res, next) => {
     await session.commitTransaction();
 
     void enviarStockBajo(productosVendidos, tienda);
+    const eventoVentaEmpleado = construirEventoVentaEmpleado(savedSale, req.usuario);
+    if (eventoVentaEmpleado) void enviarEvento(eventoVentaEmpleado);
+
     void enviarEvento({
       tipo: 'venta',
       titulo: 'Nueva venta',
       mensaje: `$${Number(total).toLocaleString('es-AR', { minimumFractionDigits: 2 })} · ${req.usuario.nombre}`,
-      url: '/sales',
+      url: '/ventas',
       tienda,
       para: { usuarioId: req.usuario.id, nombre: req.usuario.nombre },
     });
@@ -175,6 +275,14 @@ export const eliminarVenta = async (req, res, next) => {
 
     const idsProductos = articulos.map((item) => item.producto).filter(Boolean);
     const productos = await Producto.find(filtroTienda(req, { _id: { $in: idsProductos } })).session(session);
+    const productoEnPapelera = productos.find((p) => p.enPapelera);
+    if (productoEnPapelera) {
+      await session.abortTransaction();
+      return res.status(409).json({
+        message: `No se puede eliminar la venta porque "${productoEnPapelera.nombre}" está en la papelera. Restauralo desde la papelera para continuar.`,
+        code: 'EN_PAPELERA',
+      });
+    }
     const productosPorId = new Map(productos.map((p) => [p._id.toString(), p]));
     const modificados = new Map();
 
@@ -196,6 +304,12 @@ export const eliminarVenta = async (req, res, next) => {
 
     for (const product of modificados.values()) {
       await product.save({ session });
+    }
+
+    if (venta.cliente) {
+      await cancelarCuotasDeVenta(session, venta, req.usuario, 'Venta eliminada');
+      await anularCargosDeVenta(session, venta._id, req.usuario, 'Venta eliminada');
+      await recalcularImputacionesCliente(session, venta.cliente);
     }
 
     await Venta.findOneAndDelete(filtroTienda(req, { _id: req.params.id })).session(session);
@@ -335,6 +449,8 @@ const calcularResumenCaja = async (caja) => {
   const totalDevoluciones = Math.round(devoluciones.reduce((sum, r) => sum + (r.montoDevuelto || 0), 0) * 100) / 100;
   const efectivoDevuelto = Math.round(devoluciones.reduce((sum, r) => sum + (r.efectivoDevuelto || 0), 0) * 100) / 100;
 
+  const cobros = await cobrosDeCuentaCorriente(desde, hasta);
+
   const total = Math.round(sales.reduce((sum, s) => sum + totalNetoVenta(s), 0) * 100) / 100;
   const cantidad = sales.reduce((sum, s) => sum + unidadesNetasVenta(s), 0);
 
@@ -365,9 +481,10 @@ const calcularResumenCaja = async (caja) => {
   }, {});
 
   const fondo = caja.fondoInicial || 0;
+  // Vender a cuenta corriente no suma efectivo, pero cobrarle despues si: ahi entra a la gaveta.
   const efectivoEsperado = Math.max(
     0,
-    Math.round((fondo + (porMetodo.efectivo?.total || 0) - totalRetiros - efectivoDevuelto) * 100) / 100
+    Math.round((fondo + (porMetodo.efectivo?.total || 0) - totalRetiros - efectivoDevuelto + cobros.efectivo) * 100) / 100
   );
 
   return {
@@ -378,6 +495,7 @@ const calcularResumenCaja = async (caja) => {
     totalRetiros,
     totalDevoluciones,
     efectivoDevuelto,
+    cobros,
     total,
     cantidad,
     porMetodo,
@@ -393,6 +511,12 @@ const resumenParaRespuesta = (resumen) => ({
   efectivo: { total: resumen.porMetodo.efectivo?.total || 0, cantidad: resumen.porMetodo.efectivo?.cantidad || 0 },
   transferencia: { total: resumen.porMetodo.transferencia?.total || 0, cantidad: resumen.porMetodo.transferencia?.cantidad || 0 },
   tarjeta: { total: resumen.porMetodo.tarjeta?.total || 0, cantidad: resumen.porMetodo.tarjeta?.cantidad || 0 },
+  cuentaCorriente: {
+    total: resumen.porMetodo.cuentaCorriente?.total || 0,
+    cantidad: resumen.porMetodo.cuentaCorriente?.cantidad || 0,
+  },
+  totalCobrosCuentaCorriente: resumen.cobros?.total || 0,
+  cobrosEfectivo: resumen.cobros?.efectivo || 0,
   totalRetiros: resumen.totalRetiros,
   totalDevoluciones: resumen.totalDevoluciones,
   efectivoDevuelto: resumen.efectivoDevuelto,
@@ -420,6 +544,12 @@ export const abrirCaja = async (req, res, next) => {
       return res.status(409).json({
         message: yaCerrada.estado === 'cerrando' ? MENSAJE_CIERRE_EN_CURSO : 'La caja de hoy ya fue cerrada.',
       });
+    }
+
+    const cierresDelDia = await CierreCaja.find({ fecha: fechaDate, estado: 'cerrado' }).select('turno');
+    const turnosCerrados = new Set(cierresDelDia.map((c) => c.turno));
+    if (turnosCerrados.has('manana') && turnosCerrados.has('tarde')) {
+      return res.status(409).json({ message: 'La caja de hoy ya fue cerrada (mañana y tarde).' });
     }
 
     let caja;
@@ -465,18 +595,25 @@ export const obtenerCajaAbierta = async (req, res, next) => {
     const offset = Number.isFinite(offsetRaw) ? offsetRaw : 0;
     const hoy = inicioDeDia(offset);
     const tienda = idTienda(req);
-    const cierreHoy = await CierreCaja.findOne({ ...filtroCierreDia(hoy, tienda), estado: 'cerrado' })
-      .select('_id fecha cerradaEn cerradoPor total cantidad reaperturas');
+    const cierresHoy = await CierreCaja.find(filtroTienda(req, { fecha: hoy, estado: 'cerrado' })).select(
+      '_id fecha turno cerradaEn cerradoPor total cantidad reaperturas'
+    );
+    const turnosCerrados = [...new Set(cierresHoy.map((c) => c.turno || 'dia'))];
+    const diaCompleto =
+      turnosCerrados.includes('dia') || (turnosCerrados.includes('manana') && turnosCerrados.includes('tarde'));
+    const cierreHoy = cierresHoy.find((c) => (c.turno || 'dia') === 'dia') || null;
 
     const caja = await buscarCajaAbierta(null, tienda);
     if (!caja) {
-      return res.json({ caja: null, resumen: null, cierreHoy, esDeHoy: false });
+      return res.json({ caja: null, resumen: null, cierreHoy, turnosCerrados, diaCompleto, esDeHoy: false });
     }
     const resumen = await calcularResumenCaja(caja);
     res.json({
       caja,
       resumen: resumenParaRespuesta(resumen),
       cierreHoy: null,
+      turnosCerrados,
+      diaCompleto,
       esDeHoy: cajaEsDeHoy(caja, offset),
     });
   } catch (error) {
@@ -484,22 +621,150 @@ export const obtenerCajaAbierta = async (req, res, next) => {
   }
 };
 
+const etiquetaTurno = (turno) => (turno === 'manana' ? 'Mañana' : turno === 'tarde' ? 'Tarde' : 'Día');
+
+const validarTurnoDeCierre = async (caja, turno) => {
+  const otros = await CierreCaja.find({
+    fecha: caja.fecha,
+    _id: { $ne: caja._id },
+    estado: { $ne: 'abierto' },
+  }).select('turno');
+
+  if (otros.length === 0) return null;
+  if (turno === 'dia') {
+    return 'Ese día ya tiene cierres por turno. Elegí Mañana o Tarde.';
+  }
+  if (otros.some((c) => c.turno === turno)) {
+    return `El cierre de ${turno === 'manana' ? 'mañana' : 'tarde'} de hoy ya fue registrado.`;
+  }
+  if (otros.some((c) => !c.turno || c.turno === 'dia')) {
+    return 'La caja de hoy ya fue cerrada como Día completo.';
+  }
+  return null;
+};
+
+export const combinarCierresDia = (closes) => {
+  if (!closes?.length) return null;
+  const orden = { manana: 0, dia: 1, tarde: 2 };
+  const ordenados = [...closes].sort((a, b) => (orden[a.turno] ?? 1) - (orden[b.turno] ?? 1));
+  const principal = ordenados[0];
+  const ultimo = ordenados[ordenados.length - 1];
+  const suma = (fn) => ordenados.reduce((total, c) => total + (Number(fn(c)) || 0), 0);
+
+  return {
+    fecha: principal.fecha,
+    turno: 'dia',
+    abiertoPor: principal.abiertoPor || '',
+    abiertaEn: principal.abiertaEn || principal.fecha,
+    fondoInicial: principal.fondoInicial || 0,
+    cerradaEn: ultimo.cerradaEn || new Date(),
+    cerradoPor: [...new Set(ordenados.map((c) => c.cerradoPor).filter(Boolean))].join(' / ') || '—',
+    total: redondear(suma((c) => c.total)),
+    cantidad: suma((c) => c.cantidad),
+    efectivo: {
+      total: redondear(suma((c) => c.efectivo?.total)),
+      cantidad: suma((c) => c.efectivo?.cantidad),
+    },
+    transferencia: {
+      total: redondear(suma((c) => c.transferencia?.total)),
+      cantidad: suma((c) => c.transferencia?.cantidad),
+    },
+    tarjeta: {
+      total: redondear(suma((c) => c.tarjeta?.total)),
+      cantidad: suma((c) => c.tarjeta?.cantidad),
+    },
+    cuentaCorriente: {
+      total: redondear(suma((c) => c.cuentaCorriente?.total)),
+      cantidad: suma((c) => c.cuentaCorriente?.cantidad),
+    },
+    totalCobrosCuentaCorriente: redondear(suma((c) => c.totalCobrosCuentaCorriente)),
+    cobrosEfectivo: redondear(suma((c) => c.cobrosEfectivo)),
+    retiros: ordenados.flatMap((c) =>
+      (c.retiros || []).map((r) => ({
+        monto: r.monto,
+        motivo: r.motivo,
+        realizadoPor: r.realizadoPor,
+        fecha: r.fecha,
+      }))
+    ),
+    totalRetiros: redondear(suma((c) => c.totalRetiros)),
+    totalDevoluciones: redondear(suma((c) => c.totalDevoluciones)),
+    efectivoDevuelto: redondear(suma((c) => c.efectivoDevuelto)),
+    reaperturas: [],
+  };
+};
+
+const desgloseDeTurno = (c) => ({
+  turno: c.turno || 'dia',
+  total: redondear(c.total),
+  cantidad: c.cantidad || 0,
+  efectivo: { total: redondear(c.efectivo?.total), cantidad: c.efectivo?.cantidad || 0 },
+  transferencia: { total: redondear(c.transferencia?.total), cantidad: c.transferencia?.cantidad || 0 },
+  tarjeta: { total: redondear(c.tarjeta?.total), cantidad: c.tarjeta?.cantidad || 0 },
+  cuentaCorriente: { total: redondear(c.cuentaCorriente?.total), cantidad: c.cuentaCorriente?.cantidad || 0 },
+  cerradoPor: c.cerradoPor || '',
+  cerradaEn: c.cerradaEn,
+});
+
+const construirReporteDia = async (fecha) => {
+  const closes = await CierreCaja.find({ fecha, estado: 'cerrado' });
+  if (!closes.length) return null;
+  const merged = combinarCierresDia(closes);
+  const inicios = closes.map((c) => new Date(c.desde || c.abiertaEn || c.fecha).getTime());
+  const finales = closes.map((c) => new Date(c.hasta || c.cerradaEn || c.fecha).getTime());
+  const desde = new Date(Math.min(...inicios));
+  const hasta = new Date(Math.max(...finales));
+  const ventas = await Venta.find({ fechaCreacion: { $gte: desde, $lt: hasta } })
+    .populate('articulos.producto', 'nombre categoria')
+    .populate('producto', 'nombre categoria');
+  return { merged, ventas, desgloseTurnos: closes.map(desgloseDeTurno) };
+};
+
+const enviarReporteDiaDeFecha = async (fecha, offset) => {
+  const reporte = await construirReporteDia(fecha);
+  if (!reporte) return { enviado: false, motivo: 'sin-cierres' };
+  const resultado = await enviarCierreDeCaja({
+    ventas: reporte.ventas,
+    close: reporte.merged,
+    offset,
+    turno: 'dia',
+    desgloseTurnos: reporte.desgloseTurnos,
+  });
+  return { ...resultado, reporte };
+};
+
 export const cerrarCaja = async (req, res, next) => {
   try {
     const data = schemaCerrarCaja.parse(req.body);
     const offset = Number.isFinite(Number(data.offset)) ? Number(data.offset) : 0;
     const tienda = idTienda(req);
+    const turno = data.turno;
 
-    let caja = await CierreCaja.findOneAndUpdate(
-      filtroTienda(req, { estado: 'abierto' }),
-      { $set: { estado: 'cerrando', cerradaEn: new Date() } },
-      { new: true }
-    );
+    let caja = await CierreCaja.findOne(filtroTienda(req, { estado: 'abierto' }));
+    if (caja) {
+      const conflicto = await validarTurnoDeCierre(caja, turno);
+      if (conflicto) {
+        return res.status(409).json({ message: conflicto });
+      }
+      caja = await CierreCaja.findOneAndUpdate(
+        { _id: caja._id, ...filtroTienda(req, { estado: 'abierto' }) },
+        { $set: { estado: 'cerrando', cerradaEn: new Date() } },
+        { new: true }
+      );
+    }
 
     if (!caja) {
       caja = await CierreCaja.findOne(filtroTienda(req, { estado: 'cerrando' }));
       if (!caja) {
         return res.status(409).json({ message: 'No hay una caja abierta para cerrar' });
+      }
+      const conflicto = await validarTurnoDeCierre(caja, turno);
+      if (conflicto) {
+        await CierreCaja.updateOne(
+          { _id: caja._id, estado: 'cerrando' },
+          { $set: { estado: 'abierto', cerradaEn: null } }
+        );
+        return res.status(409).json({ message: conflicto });
       }
     }
 
@@ -507,51 +772,70 @@ export const cerrarCaja = async (req, res, next) => {
     caja.cerradaEn = cerradaEn;
     const resumen = await calcularResumenCaja(caja);
 
-    const actualizada = await CierreCaja.findOneAndUpdate(
-      { _id: caja._id, estado: 'cerrando' },
-      {
-        $set: {
-          estado: 'cerrado',
-          cerradaEn,
-          cerradoPor: data.nombre,
-          cerradoPorUsuario: req.usuario?.nombre || '',
-          desde: resumen.desde,
-          hasta: cerradaEn,
-          total: resumen.total,
-          cantidad: resumen.cantidad,
-          efectivo: {
-            total: resumen.porMetodo.efectivo?.total || 0,
-            cantidad: resumen.porMetodo.efectivo?.cantidad || 0,
+    let actualizada;
+    try {
+      actualizada = await CierreCaja.findOneAndUpdate(
+        { _id: caja._id, estado: 'cerrando' },
+        {
+          $set: {
+            estado: 'cerrado',
+            turno,
+            cerradaEn,
+            cerradoPor: data.nombre,
+            cerradoPorUsuario: req.usuario?.nombre || '',
+            desde: resumen.desde,
+            hasta: cerradaEn,
+            total: resumen.total,
+            cantidad: resumen.cantidad,
+            efectivo: {
+              total: resumen.porMetodo.efectivo?.total || 0,
+              cantidad: resumen.porMetodo.efectivo?.cantidad || 0,
+            },
+            transferencia: {
+              total: resumen.porMetodo.transferencia?.total || 0,
+              cantidad: resumen.porMetodo.transferencia?.cantidad || 0,
+            },
+            tarjeta: {
+              total: resumen.porMetodo.tarjeta?.total || 0,
+              cantidad: resumen.porMetodo.tarjeta?.cantidad || 0,
+            },
+            cuentaCorriente: {
+              total: resumen.porMetodo.cuentaCorriente?.total || 0,
+              cantidad: resumen.porMetodo.cuentaCorriente?.cantidad || 0,
+            },
+            totalCobrosCuentaCorriente: resumen.cobros?.total || 0,
+            cobrosEfectivo: resumen.cobros?.efectivo || 0,
+            retiros: resumen.retiros.map((r) => ({
+              monto: r.monto,
+              motivo: r.motivo,
+              realizadoPor: r.realizadoPor,
+              fecha: r.fechaCreacion,
+            })),
+            totalRetiros: resumen.totalRetiros,
+            totalDevoluciones: resumen.totalDevoluciones,
+            efectivoDevuelto: resumen.efectivoDevuelto,
+            efectivoEsperado: resumen.efectivoEsperado,
           },
-          transferencia: {
-            total: resumen.porMetodo.transferencia?.total || 0,
-            cantidad: resumen.porMetodo.transferencia?.cantidad || 0,
-          },
-          tarjeta: {
-            total: resumen.porMetodo.tarjeta?.total || 0,
-            cantidad: resumen.porMetodo.tarjeta?.cantidad || 0,
-          },
-          retiros: resumen.retiros.map((r) => ({
-            monto: r.monto,
-            motivo: r.motivo,
-            realizadoPor: r.realizadoPor,
-            fecha: r.fechaCreacion,
-          })),
-          totalRetiros: resumen.totalRetiros,
-          totalDevoluciones: resumen.totalDevoluciones,
-          efectivoDevuelto: resumen.efectivoDevuelto,
-          efectivoEsperado: resumen.efectivoEsperado,
         },
-      },
-      { new: true }
-    );
+        { new: true }
+      );
+    } catch (error) {
+      if (error.code === 11000) {
+        await CierreCaja.updateOne(
+          { _id: caja._id, estado: 'cerrando' },
+          { $set: { estado: 'abierto', cerradaEn: null } }
+        );
+        return res.status(409).json({ message: 'Ese turno ya fue cerrado por otra operación. Probá de nuevo.' });
+      }
+      throw error;
+    }
 
     if (!actualizada) {
       return res.status(409).json({ message: 'La caja ya fue cerrada por otra operación' });
     }
 
     enSegundoPlano(
-      enviarCierreDeCaja({ ventas: resumen.sales, close: actualizada, offset, turno: 'dia', totalDia: null }),
+      enviarCierreDeCaja({ ventas: resumen.sales, close: actualizada, offset, turno: actualizada.turno }),
       {
         mensaje: 'No se pudo enviar el mail del cierre de caja',
         lugar: 'VentaController.js → cerrarCaja',
@@ -559,10 +843,18 @@ export const cerrarCaja = async (req, res, next) => {
       }
     );
 
+    if (data.enviarReporteDia && actualizada.turno === 'tarde') {
+      enSegundoPlano(enviarReporteDiaDeFecha(actualizada.fecha, offset), {
+        mensaje: 'No se pudo enviar el reporte del día',
+        lugar: 'VentaController.js → cerrarCaja',
+        queRevisar: 'Revisá la configuración MAIL_* o BREVO_API_KEY.',
+      });
+    }
+
     void enviarEvento({
       tipo: 'cierre',
       titulo: 'Cierre de caja',
-      mensaje: `Día · $${Number(actualizada.total).toLocaleString('es-AR', { minimumFractionDigits: 2 })} · ${data.nombre}`,
+      mensaje: `${etiquetaTurno(actualizada.turno)} · $${Number(actualizada.total).toLocaleString('es-AR', { minimumFractionDigits: 2 })} · ${data.nombre}`,
       url: '/sales',
       tienda,
       para: 'admins',
@@ -570,6 +862,7 @@ export const cerrarCaja = async (req, res, next) => {
 
     res.json({
       fecha: actualizada.fecha,
+      turno: actualizada.turno,
       estado: actualizada.estado,
       abiertaEn: actualizada.abiertaEn,
       abiertoPor: actualizada.abiertoPor,
@@ -659,6 +952,9 @@ export const obtenerCierresCaja = async (req, res, next) => {
             efectivo: { total: 0, cantidad: 0 },
             transferencia: { total: 0, cantidad: 0 },
             tarjeta: { total: 0, cantidad: 0 },
+            cuentaCorriente: { total: 0, cantidad: 0 },
+            totalCobrosCuentaCorriente: 0,
+            cobrosEfectivo: 0,
             cerradaEn: new Date(0),
             turnos: [],
           });
@@ -675,6 +971,10 @@ export const obtenerCierresCaja = async (req, res, next) => {
         g.transferencia.cantidad += c.transferencia?.cantidad || 0;
         g.tarjeta.total += c.tarjeta?.total || 0;
         g.tarjeta.cantidad += c.tarjeta?.cantidad || 0;
+        g.cuentaCorriente.total += c.cuentaCorriente?.total || 0;
+        g.cuentaCorriente.cantidad += c.cuentaCorriente?.cantidad || 0;
+        g.totalCobrosCuentaCorriente += c.totalCobrosCuentaCorriente || 0;
+        g.cobrosEfectivo += c.cobrosEfectivo || 0;
         if (c.cerradaEn > g.cerradaEn) g.cerradaEn = c.cerradaEn;
         g.turnos.push(c);
       }
@@ -687,6 +987,9 @@ export const obtenerCierresCaja = async (req, res, next) => {
         efectivo: { ...g.efectivo, total: redondear(g.efectivo.total) },
         transferencia: { ...g.transferencia, total: redondear(g.transferencia.total) },
         tarjeta: { ...g.tarjeta, total: redondear(g.tarjeta.total) },
+        cuentaCorriente: { ...g.cuentaCorriente, total: redondear(g.cuentaCorriente.total) },
+        totalCobrosCuentaCorriente: redondear(g.totalCobrosCuentaCorriente),
+        cobrosEfectivo: redondear(g.cobrosEfectivo),
       }));
       return res.json(agrupados);
     }
@@ -814,6 +1117,35 @@ export const reenviarMailCierre = async (req, res, next) => {
   }
 };
 
+export const reenviarReporteDia = async (req, res, next) => {
+  try {
+    const data = schemaReenviarReporteDia.parse(req.body);
+    const offset = Number.isFinite(Number(data.offset)) ? Number(data.offset) : 0;
+    const fecha = parsearFecha(data.fecha, offset);
+    if (!fecha) {
+      return res.status(400).json({ message: 'Fecha inválida' });
+    }
+
+    const resultado = await enviarReporteDiaDeFecha(fecha, offset);
+    if (resultado.motivo === 'sin-cierres') {
+      return res.status(404).json({ message: 'No hay cierres cerrados para esa fecha' });
+    }
+    if (!resultado.enviado) {
+      return res.status(400).json({ message: 'Mail no configurado en el servidor' });
+    }
+    res.json({ message: 'Reporte del día reenviado correctamente' });
+  } catch (error) {
+    logger.error('No se pudo reenviar el reporte del día', {
+      motivo: error.message,
+      queRevisar: 'Revisá la configuración MAIL_* o BREVO_API_KEY.',
+      origen: 'backend',
+      lugar: 'VentaController.js → reenviarReporteDia',
+      stack: error.stack,
+    });
+    next(error);
+  }
+};
+
 export const probarCorreo = async (req, res, next) => {
   try {
     const offsetRaw = Number(req.query.offset);
@@ -922,6 +1254,34 @@ export const ejecutarMigracion = async (req, res, next) => {
   }
 };
 
+export const asegurarSnapshotArticulos = async () => {
+  const filtroSinNombre = {
+    articulos: { $elemMatch: { $or: [{ nombre: { $exists: false } }, { nombre: '' }] } },
+  };
+  const pendientes = await Venta.countDocuments(filtroSinNombre);
+  if (pendientes === 0) return 0;
+
+  const cursor = Venta.find(filtroSinNombre).cursor();
+  let count = 0;
+
+  for await (const venta of cursor) {
+    let cambio = false;
+    for (const articulo of venta.articulos || []) {
+      if (articulo.nombre) continue;
+      const producto = await Producto.findById(articulo.producto).select('nombre codigo');
+      articulo.nombre = producto?.nombre || 'Producto eliminado';
+      if (!articulo.codigo) articulo.codigo = producto?.codigo || '';
+      cambio = true;
+    }
+    if (cambio) {
+      await venta.save();
+      count++;
+    }
+  }
+
+  return count;
+};
+
 export const asegurarNumerosTicket = async () => {
   const sinTicket = {
     $or: [
@@ -968,31 +1328,7 @@ export const obtenerEstadisticasVentas = async (req, res, next) => {
     const total = Math.round(sales.reduce((sum, s) => sum + totalNetoVenta(s), 0) * 100) / 100;
     const cantidad = sales.reduce((sum, s) => sum + unidadesNetasVenta(s), 0);
 
-    const porMetodo = sales.reduce((acc, s) => {
-      const unidadesNetas = unidadesNetasVenta(s);
-      if (unidadesNetas <= 0) return acc;
-      if (s.pagos && s.pagos.length > 0) {
-        const totalPagado = s.pagos.reduce((sum, p) => sum + p.monto, 0);
-        if (totalPagado <= 0) return acc;
-        let asignadas = 0;
-        for (let i = 0; i < s.pagos.length; i++) {
-          const p = s.pagos[i];
-          if (!acc[p.metodo]) acc[p.metodo] = { total: 0, cantidad: 0 };
-          acc[p.metodo].total += p.monto;
-          const parte = i === s.pagos.length - 1
-            ? unidadesNetas - asignadas
-            : Math.round(unidadesNetas * (p.monto / totalPagado));
-          acc[p.metodo].cantidad += parte;
-          asignadas += parte;
-        }
-      } else {
-        const m = s.metodoPago || 'efectivo';
-        if (!acc[m]) acc[m] = { total: 0, cantidad: 0 };
-        acc[m].total += s.total;
-        acc[m].cantidad += unidadesNetas;
-      }
-      return acc;
-    }, {});
+    const porMetodo = resumirPorMetodo(sales);
 
     res.json({
       total,
@@ -1000,6 +1336,53 @@ export const obtenerEstadisticasVentas = async (req, res, next) => {
       efectivo: porMetodo.efectivo || { total: 0, cantidad: 0 },
       transferencia: porMetodo.transferencia || { total: 0, cantidad: 0 },
       tarjeta: porMetodo.tarjeta || { total: 0, cantidad: 0 },
+      cuentaCorriente: porMetodo.cuentaCorriente || { total: 0, cantidad: 0 },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const obtenerAnaliticaVentas = async (req, res, next) => {
+  try {
+    const { desde, hasta, offset = 0 } = req.query;
+    const off = Number(offset) || 0;
+    const filter = {};
+
+    if (desde || hasta) {
+      filter.fechaCreacion = obtenerRango(desde, hasta, off);
+    }
+
+    const sales = await Venta.find(filter)
+      .populate('articulos.producto', 'nombre')
+      .populate('producto', 'nombre');
+
+    const empleados = rankingEmpleados(sales)
+      .slice(0, 5)
+      .map((fila, i) => ({ id: `emp_${i}`, ...fila }));
+
+    const productos = rankingProductosPorUnidades(sales, 5).map((fila, i) => ({
+      id: `prod_${i}`,
+      productoId: fila.productoId,
+      label: fila.nombre || 'Producto eliminado',
+      unidades: fila.unidades,
+    }));
+
+    const mapaEmpleados = new Map(empleados.map((fila) => [fila.empleado, fila.id]));
+    const mapaProductos = new Map(productos.map((fila) => [fila.productoId, fila.id]));
+
+    res.json({
+      resumen: {
+        total: redondear(sales.reduce((sum, s) => sum + totalNetoVenta(s), 0)),
+        cantidad: sales.reduce((sum, s) => sum + unidadesNetasVenta(s), 0),
+      },
+      ejes: {
+        dia: { clave: 'fecha', puntos: construirEje(sales, off, 'dia', mapaEmpleados, mapaProductos) },
+        semana: { clave: 'semana', puntos: construirEje(sales, off, 'semana', mapaEmpleados, mapaProductos) },
+        mes: { clave: 'mes', puntos: construirEje(sales, off, 'mes', mapaEmpleados, mapaProductos) },
+      },
+      empleados,
+      productos,
     });
   } catch (error) {
     next(error);

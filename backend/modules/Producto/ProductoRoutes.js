@@ -8,6 +8,8 @@ import {
   crearProducto,
   actualizarProducto,
   eliminarProducto,
+  restaurarProducto,
+  eliminarDefinitivo,
   obtenerEstadisticasTablero,
   intercambiarProducto,
   agregarStock,
@@ -19,6 +21,9 @@ import {
   retirarStock,
   retirarDelCatalogo,
   obtenerStockBajo,
+  aplicarAumentoMasivo,
+  obtenerAumentos,
+  deshacerAumento,
 } from './ProductoController.js';
 import { proteger, admin } from '../../middlewares/AutenticacionMiddleware.js';
 import { resolverTienda } from '../../middlewares/TenantMiddleware.js';
@@ -32,9 +37,12 @@ router.get('/stock-bajo', obtenerStockBajo);
 router.get('/categorias', obtenerCategorias);
 router.get('/codigo/:codigo', obtenerProductoPorCodigo);
 router.get('/siguiente-codigo', admin, siguienteCodigo);
+router.get('/aumentos', admin, obtenerAumentos);
 router.get('/', obtenerProductos);
 router.get('/:id', obtenerProducto);
 router.post('/', admin, crearProducto);
+router.post('/aumento-masivo', admin, aplicarAumentoMasivo);
+router.post('/aumentos/:id/deshacer', admin, deshacerAumento);
 router.put('/:id', admin, actualizarProducto);
 router.put('/:id/agregar-stock', admin, agregarStock);
 router.put('/:id/deposito', admin, agregarDeposito);
@@ -45,6 +53,8 @@ router.post('/:id/reponer', reponerStock);
 router.post('/:id/retirar', admin, retirarStock);
 router.post('/:id/retirar-catalogo', admin, retirarDelCatalogo);
 router.post('/intercambio', intercambiarProducto);
+router.put('/:id/restaurar', admin, restaurarProducto);
+router.delete('/:id/definitivo', admin, eliminarDefinitivo);
 router.delete('/:id', admin, eliminarProducto);
 
 export default router;

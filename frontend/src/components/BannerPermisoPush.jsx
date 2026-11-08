@@ -76,7 +76,7 @@ const BannerPermisoPush = () => {
 
   if (estado === 'denegado') {
     return (
-      <div className="pointer-events-none fixed bottom-20 md:bottom-6 inset-x-4 z-[70] flex justify-center">
+      <div className="pointer-events-none fixed inset-x-4 z-[70] flex justify-center mobile-banner">
         <div className="pointer-events-auto max-w-md w-full bg-ios-surface/95 backdrop-blur-2xl border border-ios-separator/40 rounded-2xl shadow-ios-alert px-4 py-3.5 flex items-center gap-3">
           <span className="w-9 h-9 rounded-full bg-ios-red/15 text-ios-red flex items-center justify-center shrink-0">
             <IconBell className="w-4 h-4" strokeWidth={2} />
@@ -86,7 +86,7 @@ const BannerPermisoPush = () => {
           </p>
           <button
             onClick={() => setEstado('oculto')}
-            className="text-xs text-ios-tint font-semibold shrink-0"
+            className="text-xs text-ios-tint font-semibold shrink-0 hover:underline"
           >
             Entendido
           </button>
@@ -96,7 +96,7 @@ const BannerPermisoPush = () => {
   }
 
   return (
-    <div className="pointer-events-none fixed bottom-20 md:bottom-6 inset-x-4 z-[70] flex justify-center">
+    <div className="pointer-events-none fixed inset-x-4 z-[70] flex justify-center mobile-banner">
       <div className="pointer-events-auto max-w-md w-full bg-ios-surface/95 backdrop-blur-2xl border border-ios-separator/40 rounded-2xl shadow-ios-alert px-4 py-3.5 animate-ios-modal">
         <div className="flex items-start gap-3">
           <span className="w-9 h-9 rounded-full bg-ios-tint/15 text-ios-tint flex items-center justify-center shrink-0">
@@ -112,19 +112,19 @@ const BannerPermisoPush = () => {
         <div className="mt-3 flex gap-2">
           <button
             onClick={noPreguntar}
-            className="flex-1 px-3 py-2 rounded-ios-control text-xs text-ios-tertiary font-medium bg-ios-surface2 hover:bg-ios-surface3 transition-colors"
+            className="flex-1 px-3 py-2 rounded-ios-control text-xs font-medium btn-vivo btn-vivo-gris"
           >
             No volver a preguntar
           </button>
           <button
             onClick={ahoraNo}
-            className="flex-1 px-3 py-2 rounded-ios-control text-xs text-ios-secondary font-medium bg-ios-surface2 hover:bg-ios-surface3 transition-colors"
+            className="flex-1 px-3 py-2 rounded-ios-control text-xs font-medium btn-vivo btn-vivo-gris"
           >
             Ahora no
           </button>
           <button
             onClick={activar}
-            className="flex-1 px-3 py-2 rounded-ios-control text-xs font-semibold text-white bg-ios-tint hover:bg-blue-500 transition-colors"
+            className="flex-1 px-3 py-2 rounded-ios-control text-xs font-semibold btn-vivo btn-vivo-azul"
           >
             Activar
           </button>

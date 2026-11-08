@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
-import { IconBox, IconChart, IconUsers, IconUserPlus, IconReturn, IconBell, IconTile, IconTicket, IconWarehouse, IconCart, IconStore } from '../ui/icons';
+import { IconBox, IconChart, IconUsers, IconUserPlus, IconReturn, IconBell, IconTile, IconTicket, IconWallet, IconWarehouse, IconCart, IconStore, IconArchive } from '../ui/icons';
 import { useNotificaciones } from '../../context/notificacionContexto';
+import { useSolicitudesCliente } from '../../context/solicitudContexto';
 import { useAutenticacion } from '../../context/autenticacionContexto';
 
 const links = [
@@ -10,16 +11,25 @@ const links = [
   { to: '/pedidos', label: 'Pedidos', icon: IconCart, gradient: 'from-pink-500 to-rose-600' },
   { to: '/mitienda', label: 'Mi tienda', icon: IconStore, gradient: 'from-fuchsia-500 to-purple-600', adminOnly: true },
   { to: '/tickets', label: 'Tickets', icon: IconTicket, gradient: 'from-amber-500 to-orange-600' },
+  { to: '/clientes', label: 'Clientes', icon: IconWallet, gradient: 'from-lime-500 to-emerald-600' },
   { to: '/proveedores', label: 'Proveedores', icon: IconUsers, gradient: 'from-indigo-500 to-purple-600', adminOnly: true },
   { to: '/devoluciones', label: 'Devoluciones', icon: IconReturn, gradient: 'from-orange-500 to-rose-600' },
   { to: '/notificaciones', label: 'Avisos', icon: IconBell, gradient: 'from-cyan-500 to-sky-600' },
   { to: '/empleados', label: 'Empleados', icon: IconUserPlus, gradient: 'from-rose-500 to-pink-600', adminOnly: true },
+  { to: '/papelera', label: 'Papelera', icon: IconArchive, gradient: 'from-slate-500 to-gray-600', adminOnly: true },
 ];
 
 const Sidebar = () => {
   const { pendingCount } = useNotificaciones();
+  const { pendientesCount } = useSolicitudesCliente();
   const { esAdmin } = useAutenticacion();
   const visibleLinks = links.filter((link) => !link.adminOnly || esAdmin);
+
+  const contadorDe = (to) => {
+    if (to === '/notificaciones') return pendingCount;
+    if (to === '/clientes') return esAdmin ? pendientesCount : 0;
+    return 0;
+  };
 
   return (
     <aside className="group absolute inset-y-0 left-0 z-30 w-[72px] hover:w-[260px] transition-[width] duration-300 ease-out overflow-hidden bg-ios-surface/95 backdrop-blur-2xl border-r border-ios-separator/40 flex flex-col shadow-[8px_0_28px_rgba(0,0,0,0.28)]">
@@ -42,41 +52,44 @@ const Sidebar = () => {
             to={link.to}
             end={link.to === '/'}
             className={({ isActive }) =>
-              `relative flex items-center pl-2 pr-3 py-2.5 rounded-2xl transition-colors duration-200 ${
+              `relative flex items-center pl-2 pr-3 py-2.5 rounded-2xl transition-all duration-200 ${
                 isActive
-                  ? 'bg-ios-hover/[0.08]'
+                  ? 'bg-ios-tint/15 ring-1 ring-ios-tint/30 shadow-[0_8px_18px_-10px_rgba(10,132,255,0.5)]'
                   : 'hover:bg-ios-hover/[0.05] active:bg-ios-hover/[0.09]'
               }`
             }
           >
-            {({ isActive }) => (
-              <>
-                <span className="relative shrink-0">
-                  <IconTile
-                    gradient={link.gradient}
-                    className={`w-8 h-8 transition-opacity duration-200 ${
-                      isActive ? 'opacity-100' : 'opacity-60 group-hover:opacity-90'
+            {({ isActive }) => {
+              const contador = contadorDe(link.to);
+              return (
+                <>
+                  <span className="relative shrink-0">
+                    <IconTile
+                      gradient={link.gradient}
+                      className={`w-8 h-8 transition-opacity duration-200 ${
+                        isActive ? 'opacity-100' : 'opacity-60 group-hover:opacity-90'
+                      }`}
+                    >
+                      <link.icon className="w-4 h-4 text-white" strokeWidth={2.1} />
+                    </IconTile>
+                    {contador > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 bg-ios-tint text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center leading-none shadow-[0_2px_6px_rgba(0,0,0,0.4)]">
+                        {contador > 99 ? '99+' : contador}
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className={`pointer-events-none absolute left-[56px] top-1/2 -translate-y-1/2 whitespace-nowrap text-[15px] opacity-0 transition-opacity duration-200 group-hover:opacity-100 ${
+                      isActive
+                        ? 'text-ios-label font-semibold'
+                        : 'text-ios-secondary group-hover:text-ios-label'
                     }`}
                   >
-                    <link.icon className="w-4 h-4 text-white" strokeWidth={2.1} />
-                  </IconTile>
-                  {link.to === '/notificaciones' && pendingCount > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 bg-ios-tint text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center leading-none shadow-[0_2px_6px_rgba(0,0,0,0.4)]">
-                      {pendingCount > 99 ? '99+' : pendingCount}
-                    </span>
-                  )}
-                </span>
-                <span
-                  className={`pointer-events-none absolute left-[56px] top-1/2 -translate-y-1/2 whitespace-nowrap text-[15px] opacity-0 transition-opacity duration-200 group-hover:opacity-100 ${
-                    isActive
-                      ? 'text-ios-label font-semibold'
-                      : 'text-ios-secondary group-hover:text-ios-label'
-                  }`}
-                >
-                  {link.label}
-                </span>
-              </>
-            )}
+                    {link.label}
+                  </span>
+                </>
+              );
+            }}
           </NavLink>
         ))}
       </nav>
