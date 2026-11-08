@@ -27,6 +27,12 @@ const cuotaSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+      required: true,
+      index: true,
+    },
     numero: {
       type: Number,
       required: true,
@@ -100,6 +106,10 @@ const cuotaSchema = new mongoose.Schema(
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' }, toJSON: { getters: true } }
 );
 
+cuotaSchema.index({ tienda: 1, cliente: 1, fechaVencimiento: 1 });
+cuotaSchema.index({ tienda: 1, estado: 1, fechaVencimiento: 1 });
+cuotaSchema.index({ tienda: 1, venta: 1 });
+cuotaSchema.index({ tienda: 1, fechaVencimiento: 1 });
 cuotaSchema.index({ cliente: 1, fechaVencimiento: 1 });
 cuotaSchema.index({ estado: 1, fechaVencimiento: 1 });
 cuotaSchema.index({ venta: 1 });

@@ -19,6 +19,12 @@ const movementSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+      required: true,
+      index: true,
+    },
     tipo: {
       type: String,
       enum: TIPOS_MOVIMIENTO,
@@ -95,6 +101,13 @@ const movementSchema = new mongoose.Schema(
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' }, toJSON: { getters: true } }
 );
 
+movementSchema.index({ tienda: 1, cliente: 1, fecha: -1 });
+movementSchema.index({ tienda: 1, fecha: -1 });
+movementSchema.index({ tienda: 1, tipo: 1, fecha: -1 });
+movementSchema.index({ tienda: 1, estado: 1 });
+movementSchema.index({ tienda: 1, origenVenta: 1 });
+movementSchema.index({ tienda: 1, origenDevolucion: 1 });
+movementSchema.index({ tienda: 1, origenCuota: 1 });
 movementSchema.index({ cliente: 1, fecha: -1 });
 movementSchema.index({ fecha: -1 });
 movementSchema.index({ tipo: 1, fecha: -1 });

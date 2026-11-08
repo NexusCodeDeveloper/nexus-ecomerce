@@ -31,8 +31,17 @@ const ajustesSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    tienda: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tienda',
+      required: true,
+      index: true,
+      unique: true,
+    },
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' } }
 );
+
+ajustesSchema.index({ tienda: 1 }, { unique: true });
 
 export default mongoose.model('AjustesCuentaCorriente', ajustesSchema, 'ajustesCuentaCorriente');
