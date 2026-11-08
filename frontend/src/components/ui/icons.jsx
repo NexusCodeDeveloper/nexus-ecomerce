@@ -35,6 +35,7 @@ export const IconPrint = (p) => <Icon {...p} d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v
 export const IconCamera = (p) => <Icon {...p} d="M4 7h3l2-2h6l2 2h3a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V8a1 1 0 011-1zm8 3a4 4 0 100 8 4 4 0 000-8z" />;
 
 export const IconWarehouse = (p) => <Icon {...p} d="M3 21h18M5 21V8l7-5 7 5v13M9 21v-6h6v6M9 11h6" />;
+export const IconStore = (p) => <Icon {...p} d="M3 9l1.5-5h15L21 9M4 9v11a1 1 0 001 1h14a1 1 0 001-1V9M4 9h16M9 21v-6h6v6" />;
 
 export const IconCalculator = (p) => <Icon {...p} d="M8 7h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M6 3h12a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2z" />;
 

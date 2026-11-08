@@ -101,6 +101,22 @@ describe('variantesParaEnviar', () => {
       { talle: 'L', color: '', deposito: 0 },
     ]);
   });
+
+  it('incluye el stock de catálogo cuando está definido', () => {
+    expect(variantesParaEnviar([
+      { talle: 'M', color: 'Azul', deposito: '3', catalogo: '2' },
+      { talle: '', color: '', deposito: 0, catalogo: '4' },
+    ])).toEqual([
+      { talle: 'M', color: 'Azul', deposito: 3, catalogo: 2 },
+      { talle: '', color: '', deposito: 0, catalogo: 4 },
+    ]);
+  });
+
+  it('omite el catálogo si no viene definido para no pisar el stock existente', () => {
+    expect(variantesParaEnviar([{ talle: 'M', color: '', deposito: 1 }])).toEqual([
+      { talle: 'M', color: '', deposito: 1 },
+    ]);
+  });
 });
 
 describe('paramsProductos', () => {

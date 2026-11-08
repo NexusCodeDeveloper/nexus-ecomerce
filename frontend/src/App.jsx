@@ -13,6 +13,7 @@ import Ventas from './pages/Ventas/Ventas'
 import Tickets from './pages/Tickets/Tickets'
 import Notificaciones from './pages/Notificaciones/Notificaciones'
 import Empleados from './pages/Empleados/Empleados'
+import MiTienda from './pages/MiTienda/MiTienda'
 import ResumenPlataforma from './pages/Superadmin/Resumen'
 import TiendasPlataforma from './pages/Superadmin/Tiendas'
 import TiendaDetalle from './pages/Superadmin/TiendaDetalle'
@@ -74,6 +75,7 @@ function App() {
           <Route index element={<Inicio />} />
           <Route path="productos" element={<Productos />} />
           <Route path="deposito" element={<Deposito />} />
+          <Route path="mitienda" element={<MiTienda />} />
           <Route path="ventas" element={<Ventas />} />
           <Route path="pedidos" element={<Pedidos />} />
           <Route path="tickets" element={<Tickets />} />

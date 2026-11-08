@@ -34,6 +34,7 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
     proveedor: initial?.proveedor || '',
     codigo: initial?.codigo || '',
     stockMinimo: initial?.stockMinimo ?? 2,
+    catalogo: initial?.catalogo ?? '',
   });
   const [newColor, setNewColor] = useState('');
   const [errores, setErrores] = useState({});
@@ -109,7 +110,7 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
   const addVariantToColor = (color) => {
     setForm({
       ...form,
-      variants: [...form.variants, { talle: '', color, cantidad: 0, deposito: '' }],
+      variants: [...form.variants, { talle: '', color, cantidad: 0, deposito: '', catalogo: '' }],
     });
   };
 
@@ -125,6 +126,11 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
 
   const totalCantidad = form.variants.reduce(
     (sum, v) => sum + (Number(v.deposito) || 0),
+    0
+  );
+
+  const totalCatalogo = form.variants.reduce(
+    (sum, v) => sum + (Number(v.catalogo) || 0),
     0
   );
 
@@ -147,14 +153,21 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!validate()) return;
-    onSubmit({
+    const variantes = variantesParaEnviar(form.variants);
+    const datos = {
       ...form,
       codigo: form.codigo.trim(),
       precio: Number(form.precio),
       colores: form.colores,
-      variantes: variantesParaEnviar(form.variants),
+      variantes,
       stockMinimo: Number(form.stockMinimo),
-    });
+    };
+    if (variantes.length > 0) {
+      delete datos.catalogo;
+    } else {
+      datos.catalogo = Number(form.catalogo) || 0;
+    }
+    onSubmit(datos);
   };
 
   const campoCls = (campo) =>
@@ -262,10 +275,10 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
       {Object.keys(groups).length > 0 && (
         <div>
           <label className={`${labelCls} mb-2`}>
-            Stock en depósito
+            Stock por canal
           </label>
           <p className="text-ios-tertiary text-[11px] -mt-1 mb-2">
-            Cargá talle y cantidad por variante; el stock entra al depósito y después lo pasás al salón. Si no agregás nada, el producto queda sin stock.
+            Cargá talle y cantidades por variante. El stock de depósito se distribuye al salón o al catálogo; el de catálogo se publica online. Si no agregás nada, el producto queda sin stock.
           </p>
           {errText('variants')}
           <div className="space-y-3">
@@ -299,6 +312,14 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
                           onChange={(e) => updateVariant(i, 'deposito', e.target.value)}
                           className="flex-1 sm:flex-none w-24 px-3 py-2 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
                         />
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="Cant. catálogo"
+                          value={form.variants[i].catalogo ?? ''}
+                          onChange={(e) => updateVariant(i, 'catalogo', e.target.value)}
+                          className="flex-1 sm:flex-none w-24 px-3 py-2 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
+                        />
                         <button
                           type="button"
                           onClick={() => removeVariant(i)}
@@ -321,9 +342,29 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
             })}
           </div>
 
+          {form.variants.length === 0 && (
+            <div className="mt-3">
+              <label className={labelCls}>Catálogo online (producto sin variantes)</label>
+              <input
+                type="number"
+                min="0"
+                placeholder="Cantidad en catálogo"
+                value={form.catalogo}
+                onChange={(e) => setForm({ ...form, catalogo: e.target.value })}
+                className="w-full sm:w-48 px-3 py-2 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
+              />
+              <p className="text-ios-tertiary text-[11px] mt-1">
+                Unidades que se muestran en el catálogo público.
+              </p>
+            </div>
+          )}
+
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 mt-3 text-xs">
             <span className="text-ios-secondary">
               Total en depósito: <span className="text-ios-label font-semibold">{totalCantidad}</span> unidades
+            </span>
+            <span className="text-ios-secondary">
+              Total en catálogo: <span className="text-ios-label font-semibold">{totalCatalogo}</span> unidades
             </span>
             {stockResumen && (
               <span className="text-ios-tertiary">

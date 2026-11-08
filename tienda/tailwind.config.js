@@ -8,6 +8,7 @@ export default {
       },
       colors: {
         marca: 'rgb(var(--tienda-primario) / <alpha-value>)',
+        secundario: 'rgb(var(--tienda-secundario) / <alpha-value>)',
       },
     },
   },

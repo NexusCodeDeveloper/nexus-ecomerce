@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { IconBox, IconChart, IconUsers, IconUserPlus, IconReturn, IconBell, IconTicket, IconWarehouse, IconCart } from '../ui/icons';
+import { IconBox, IconChart, IconUsers, IconUserPlus, IconReturn, IconBell, IconTicket, IconWarehouse, IconCart, IconStore } from '../ui/icons';
 import { useNotificaciones } from '../../context/notificacionContexto';
 import { useAutenticacion } from '../../context/autenticacionContexto';
 
@@ -8,6 +8,7 @@ const links = [
   { to: '/deposito', label: 'Depósito', icon: IconWarehouse, gradient: 'from-violet-500 to-purple-600' },
   { to: '/ventas', label: 'Ventas', icon: IconChart, gradient: 'from-emerald-500 to-teal-600' },
   { to: '/pedidos', label: 'Pedidos', icon: IconCart, gradient: 'from-pink-500 to-rose-600' },
+  { to: '/mitienda', label: 'Mi tienda', icon: IconStore, gradient: 'from-fuchsia-500 to-purple-600', adminOnly: true },
   { to: '/tickets', label: 'Tickets', icon: IconTicket, gradient: 'from-amber-500 to-orange-600' },
   { to: '/proveedores', label: 'Proveedores', icon: IconUsers, gradient: 'from-indigo-500 to-purple-600', adminOnly: true },
   { to: '/devoluciones', label: 'Devoluciones', icon: IconReturn, gradient: 'from-orange-500 to-rose-600' },

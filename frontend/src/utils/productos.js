@@ -30,12 +30,23 @@ export const soloEnDeposito = (p) => salonTotal(p) === 0 && depositoTotal(p) > 0
 
 export const variantesParaEnviar = (variants = []) =>
   variants
-    .filter((v) => (v.talle || '').trim() || (Number(v.deposito) || 0) > 0)
-    .map((v) => ({
-      talle: (v.talle || '').trim(),
-      color: v.color,
-      deposito: Number(v.deposito) || 0,
-    }));
+    .filter(
+      (v) =>
+        (v.talle || '').trim() ||
+        (Number(v.deposito) || 0) > 0 ||
+        (Number(v.catalogo) || 0) > 0
+    )
+    .map((v) => {
+      const fila = {
+        talle: (v.talle || '').trim(),
+        color: v.color,
+        deposito: Number(v.deposito) || 0,
+      };
+      if (v.catalogo !== undefined && v.catalogo !== null && v.catalogo !== '') {
+        fila.catalogo = Number(v.catalogo) || 0;
+      }
+      return fila;
+    });
 
 export const tieneStockBajo = (p) => {
   if (p.stockMinimo == null) return false;

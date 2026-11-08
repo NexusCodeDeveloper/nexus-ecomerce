@@ -1,27 +1,23 @@
-import { useState, useRef } from 'react';
+import { useRef, useState } from 'react';
 import { useIosAlert } from '../../components/alerts';
-import { obtenerMensajeErrorApi } from '../../utils/apiError';
 import { firmarSubidaCloudinary } from '../../api/tienda';
+import { validarImagen } from '../../utils/imagenes';
 
-const TIPOS_ACEPTADOS = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_SIZE = 4.5 * 1024 * 1024; // 4.5MB límite Vercel
-
-const SubirImagen = ({ tipo, onSubida, subiendo, onCancelar }) => {
+const SubirImagen = ({ tipo, valor, onSubida, onQuitar, etiqueta = 'Subir imagen' }) => {
   const { toast } = useIosAlert();
   const [subiendo, setSubiendo] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef(null);
 
-  const handleFileChange = async (event) => {
+  const handleFileSelect = async (event) => {
     const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
 
-    if (!TIPOS_ACEPTADOS.includes(file.type)) {
-      toast({ message: 'Solo JPG, PNG o WebP', type: 'error' });
-      return;
-    }
-    if (file.size > MAX_SIZE) {
-      toast({ message: 'Máximo 4.5 MB', type: 'error' });
+    const validacion = validarImagen(file);
+    if (!validacion.ok) {
+      setError(validacion.mensaje);
+      toast({ message: validacion.mensaje, type: 'error' });
       return;
     }
 
@@ -29,63 +25,90 @@ const SubirImagen = ({ tipo, onSubida, subiendo, onCancelar }) => {
     setError('');
 
     try {
-      const resFirma = await fetch('/api/tienda/cloudinary/firma', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-      });
-      if (!res.ok) throw new Error('Cloudinary no configurado');
-      const { signature, timestamp, folder, apiKey, cloudName } = await res.json();
+      const { data: firma } = await firmarSubidaCloudinary();
 
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('api_key', 'YOUR_API_KEY'); // Se completa desde la firma
-      formData.append('timestamp', timestamp);
-      formData.append('signature', signature);
-      formData.append('folder', folder);
+      formData.append('api_key', firma.apiKey);
+      formData.append('timestamp', String(firma.timestamp));
+      formData.append('signature', firma.signature);
+      formData.append('folder', firma.folder);
 
-      const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${firma.cloudName}/image/upload`, {
         method: 'POST',
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || 'Error al subir');
+      const subida = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(subida.error?.message || 'No se pudo subir la imagen');
+      if (!subida.secure_url) throw new Error('Cloudinary no devolvió la URL de la imagen');
 
-      onSubida(data.secure_url);
+      onSubida?.(subida.secure_url);
+      toast({ message: 'Imagen subida', type: 'success' });
     } catch (err) {
-      toast({ message: 'Error al subir imagen', type: 'error' });
+      const mensaje = err?.response?.data?.message || err?.message || 'No se pudo subir la imagen';
+      setError(mensaje);
+      toast({ message: mensaje, type: 'error' });
     } finally {
       setSubiendo(false);
     }
   };
 
-  const handleFileChange = (event) => {
-    const file = event.target.files?.[0];
-    if (file) onCambio(file);
-  };
-
   return (
-    <div className="relative">
-      <label className="block w-full cursor-pointer">
-        <input
-          type="file"
-          ref={fileRef}
-          accept="image/jpeg,image/png,image/webp"
-          onChange={handleFileChange}
-          className="hidden"
-          id={`upload-${tipo}`}
-        />
-        <label
-          htmlFor={`upload-${tipo}`}
-          className={`w-full aspect-video rounded-2xl border-2 border-dashed border-slate-200/50 bg-ios-surface p-6 flex flex-col items-center justify-center cursor-pointer transition hover:border-marca/50`}
-        >
-          <svg className="w-12 h-12 mx-auto text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 13.414V5a2 2 0 012-2h6a2 2 0 012 2v15.793l2.293-2.293a2 2 0 012.828 0L22 19.414" />
-          </svg>
-          <p className="mt-3 text-sm text-slate-500">Arrastra o haz clic para subir</p>
-          <p className="text-xs text-slate-400 mt-1">JPG, PNG, WebP · máx 4.5 MB</p>
-        </label>
-        {subiendo && <div className="absolute inset-0 bg-white/80 flex items-center justify-center"><div className="h-6 w-6 animate-spin rounded-full border-2 border-marca border-t-transparent" /></div>}
-        {error && <p className="mt-2 text-sm text-red-500">{error}</p>}
-      </label>
+    <div className="space-y-2">
+      <div className="relative aspect-video w-full overflow-hidden rounded-2xl border-2 border-dashed border-ios-separator/50 bg-ios-surface">
+        {valor ? (
+          <>
+            <img src={valor} alt={etiqueta} className="h-full w-full object-cover" />
+            <div className="absolute inset-x-0 bottom-0 flex justify-end gap-2 bg-gradient-to-t from-black/60 to-transparent p-2">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="rounded-full bg-white/90 px-3 py-1.5 text-xs font-semibold text-ios-label transition hover:bg-white"
+              >
+                Cambiar
+              </button>
+              {onQuitar && (
+                <button
+                  type="button"
+                  onClick={onQuitar}
+                  className="rounded-full bg-black/50 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-black/70"
+                >
+                  Quitar
+                </button>
+              )}
+            </div>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="flex h-full w-full flex-col items-center justify-center gap-1 px-4 text-center text-ios-secondary transition hover:bg-ios-hover"
+          >
+            <svg className="h-10 w-10 text-ios-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 13.414V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2z" />
+            </svg>
+            <span className="text-sm font-medium">{etiqueta}</span>
+            <span className="text-[11px] text-ios-tertiary">JPG, PNG o WebP · máx 4.5 MB</span>
+          </button>
+        )}
+
+        {subiendo && (
+          <div className="absolute inset-0 flex items-center justify-center bg-ios-surface/80">
+            <div className="h-7 w-7 animate-spin rounded-full border-2 border-ios-tint border-t-transparent" />
+          </div>
+        )}
+      </div>
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        onChange={handleFileSelect}
+        className="hidden"
+        id={`upload-${tipo}`}
+      />
+
+      {error && <p className="text-xs text-ios-red">{error}</p>}
     </div>
   );
 };

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { obtenerProductos, crearProducto, actualizarProducto, eliminarProducto, addDeposito, reponerStock, pasarSalon, pasarCatalogo } from '../../api/productos';
+import { obtenerProductos, crearProducto, actualizarProducto, eliminarProducto, addDeposito, reponerStock, pasarSalon, pasarCatalogo, addCatalogo, retirarCatalogo } from '../../api/productos';
 import { obtenerMovimientosStock } from '../../api/movimientosStock';
 import { obtenerMensajeErrorApi } from '../../utils/apiError';
 import { printLabel } from '../../utils/printLabel';
@@ -34,7 +34,11 @@ const TIPOS = {
 const TITULOS_MODAL = {
   reponer: 'Pasar al salón',
   cargar: 'Reponer stock',
+  catalogo: 'Ajustar catálogo',
+  retirar_catalogo: 'Retirar del catálogo',
 };
+
+const MODOS_CATALOGO = ['catalogo', 'retirar_catalogo'];
 
 const MEDIDAS_ETIQUETA = {
   '60x40': { ancho: 60, alto: 40 },
@@ -285,16 +289,21 @@ const Deposito = () => {
   const modalVariants = modalProducto?.variantes || [];
   const modalVariant = modalVariants[Number(modalVariantIdx)] || null;
   const modalEsNueva = stockModal?.modo === 'cargar' && modalVariants.length > 0 && modalVariantIdx === '__nueva__';
+  const modalEsCatalogo = MODOS_CATALOGO.includes(stockModal?.modo);
 
   const disponibleModal = (() => {
     if (!modalProducto) return 0;
     if (modalEsNueva) return 0;
+    if (modalEsCatalogo) {
+      return modalVariant ? (modalVariant.catalogo || 0) : (modalProducto.catalogo || 0);
+    }
     return modalVariant ? (modalVariant.deposito || 0) : (modalProducto.deposito || 0);
   })();
 
   const confirmarModal = async () => {
     if (!stockModal || modalSaving) return;
-    const esFijar = stockModal.modo === 'cargar' && modalFijar;
+    const esFijar = (stockModal.modo === 'cargar' || stockModal.modo === 'catalogo') && modalFijar;
+    const esRetiroCatalogo = stockModal.modo === 'retirar_catalogo';
     const cantidad = Number(modalCantidad);
     if (!Number.isInteger(cantidad) || cantidad < 0 || (!esFijar && cantidad < 1)) {
       alert({
@@ -312,12 +321,16 @@ const Deposito = () => {
       alert({ icon: 'warning', title: 'Campo requerido', message: 'Ingresá el talle o el color de la nueva variante' });
       return;
     }
-    if (stockModal.modo === 'reponer' && cantidad > disponibleModal) {
-      alert({ icon: 'warning', title: 'Stock insuficiente', message: `Solo hay ${disponibleModal} unidad(es) en depósito` });
+    if ((stockModal.modo === 'reponer' || esRetiroCatalogo) && cantidad > disponibleModal) {
+      alert({
+        icon: 'warning',
+        title: 'Stock insuficiente',
+        message: `Solo hay ${disponibleModal} unidad(es) en ${esRetiroCatalogo ? 'catálogo' : 'depósito'}`,
+      });
       return;
     }
     if (esFijar && cantidad === disponibleModal) {
-      toast({ message: 'Sin cambios en el depósito' });
+      toast({ message: `Sin cambios en ${modalEsCatalogo ? 'el catálogo' : 'el depósito'}` });
       setStockModal(null);
       return;
     }
@@ -334,6 +347,12 @@ const Deposito = () => {
       if (stockModal.modo === 'reponer') {
         await reponerStock(modalProducto._id, payload);
         toast({ message: `Repuesto al salón: ${modalProducto.nombre}` });
+      } else if (stockModal.modo === 'catalogo') {
+        await addCatalogo(modalProducto._id, payload);
+        toast({ message: esFijar ? `Catálogo ajustado: ${modalProducto.nombre}` : `Catálogo actualizado: ${modalProducto.nombre}` });
+      } else if (stockModal.modo === 'retirar_catalogo') {
+        await retirarCatalogo(modalProducto._id, payload);
+        toast({ message: `Retirado del catálogo: ${modalProducto.nombre}` });
       } else {
         await addDeposito(modalProducto._id, payload);
         toast({ message: esFijar ? `Depósito ajustado: ${modalProducto.nombre}` : `Depósito actualizado: ${modalProducto.nombre}` });
@@ -879,6 +898,34 @@ const Deposito = () => {
                 Pasar todo al catálogo
               </button>
             )}
+            {esAdmin && (
+              <>
+                <button
+                  onClick={() => {
+                    const p = dropdown.product;
+                    cerrarDropdown();
+                    abrirModal(p, 'catalogo');
+                  }}
+                  className="flex items-center gap-2.5 w-full px-3.5 py-2.5 text-sm text-ios-tint hover:bg-ios-hover/5 rounded-xl transition-colors font-medium"
+                >
+                  <IconRefresh className="w-4 h-4" />
+                  Ajustar catálogo
+                </button>
+                {catalogoTotal(dropdown.product) > 0 && (
+                  <button
+                    onClick={() => {
+                      const p = dropdown.product;
+                      cerrarDropdown();
+                      abrirModal(p, 'retirar_catalogo');
+                    }}
+                    className="flex items-center gap-2.5 w-full px-3.5 py-2.5 text-sm text-amber-400 hover:bg-ios-hover/5 rounded-xl transition-colors font-medium"
+                  >
+                    <IconArrowUp className="w-4 h-4 rotate-180" />
+                    Retirar del catálogo
+                  </button>
+                )}
+              </>
+            )}
             {dropdown.product?.codigo && (
               <button
                 onClick={() => {
@@ -954,7 +1001,7 @@ const Deposito = () => {
                   <option value="" className="bg-ios-surface2">Seleccionar...</option>
                   {modalVariants.map((v, i) => (
                     <option key={i} value={String(i)} className="bg-ios-surface2">
-                      {variantLabel(v)} (dep: {v.deposito || 0} · salón: {v.cantidad || 0})
+                      {variantLabel(v)} (dep: {v.deposito || 0} · salón: {v.cantidad || 0} · cat: {v.catalogo || 0})
                     </option>
                   ))}
                   {stockModal.modo === 'cargar' && (
@@ -998,14 +1045,20 @@ const Deposito = () => {
                   {modalEsNueva ? 0 : modalVariant ? (modalVariant.cantidad || 0) : (modalProducto.cantidad || 0)}
                 </span>
               </div>
+              <div className="flex items-center justify-between">
+                <span className="text-ios-tertiary">En catálogo</span>
+                <span className="text-ios-label font-semibold tabular-nums">
+                  {modalEsNueva ? 0 : modalVariant ? (modalVariant.catalogo || 0) : (modalProducto.catalogo || 0)}
+                </span>
+              </div>
             </div>
 
-            {stockModal.modo === 'cargar' && (
+            {(stockModal.modo === 'cargar' || stockModal.modo === 'catalogo') && (
               <label className="flex items-center justify-between gap-3 cursor-pointer select-none">
                 <span className="text-sm text-ios-secondary font-medium">
                   Fijar cantidad (inventario)
                   <span className="block text-[11px] text-ios-tertiary mt-0.5">
-                    Deja el depósito exactamente en la cantidad ingresada.
+                    Deja el {stockModal.modo === 'catalogo' ? 'catálogo' : 'depósito'} exactamente en la cantidad ingresada.
                   </span>
                 </span>
                 <IosToggle checked={modalFijar} onChange={setModalFijar} />
@@ -1017,9 +1070,15 @@ const Deposito = () => {
               hint={
                 stockModal.modo === 'reponer'
                   ? `Disponible en depósito: ${disponibleModal}`
-                  : modalFijar
-                    ? 'Se fijará el stock del depósito'
-                    : 'Se sumará al depósito'
+                  : stockModal.modo === 'retirar_catalogo'
+                    ? `Disponible en catálogo: ${disponibleModal} · vuelve al depósito`
+                    : stockModal.modo === 'catalogo'
+                      ? modalFijar
+                        ? 'Se fijará el stock del catálogo'
+                        : 'Se sumará al catálogo'
+                      : modalFijar
+                        ? 'Se fijará el stock del depósito'
+                        : 'Se sumará al depósito'
               }
             >
               <IosInput
@@ -1033,7 +1092,7 @@ const Deposito = () => {
               />
             </IosField>
 
-            {stockModal.modo === 'cargar' && modalFijar && (
+            {(stockModal.modo === 'cargar' || stockModal.modo === 'catalogo') && modalFijar && (
               <p className="text-ios-tertiary text-[11px]">
                 Stock actual: {disponibleModal} → nuevo: {Number(modalCantidad) || 0}
                 {Number(modalCantidad) !== disponibleModal && (

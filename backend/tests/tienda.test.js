@@ -9,6 +9,7 @@ import {
   firmarSubidaCloudinary,
 } from '../modules/Tienda/TiendaController.js';
 import { firmaDeSubida, cloudinaryConfigurado } from '../services/CloudinaryService.js';
+import { admin } from '../middlewares/AutenticacionMiddleware.js';
 
 before(async () => {
   await startTestDB();
@@ -90,6 +91,15 @@ test('actualizarMiTienda rechaza colores inválidos', async () => {
 
   const actualizada = await Tienda.findById(tienda._id);
   assert.equal(actualizada.tema.colorPrimario, '#111827');
+});
+
+test('editar la tienda y subir imágenes requiere rol administrador', async () => {
+  const res = await runHandler(admin, {
+    usuario: { id: '507f1f77bcf86cd799439011', nombre: 'Empleado', rol: 'user' },
+  });
+
+  assert.equal(res.status, 403);
+  assert.match(res.body.message, /administrador/i);
 });
 
 test('la firma de Cloudinary devuelve 503 si no está configurada', async () => {
