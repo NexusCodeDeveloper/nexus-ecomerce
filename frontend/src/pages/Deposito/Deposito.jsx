@@ -6,7 +6,7 @@ import { obtenerPromociones, crearPromocion, cancelarPromocion, eliminarPromocio
 import { obtenerMensajeErrorApi } from '../../utils/apiError';
 import { printLabel } from '../../utils/printLabel';
 import { formatDate, formatMoney } from '../../utils/format';
-import { LIMITE_PRODUCTOS, depositoTotal, salonTotal, catalogoTotal, variantLabel, paramsProductos } from '../../utils/productos';
+import { depositoTotal, salonTotal, catalogoTotal, variantLabel, paramsProductos } from '../../utils/productos';
 import { precioVigente, tieneOferta, etiquetaOferta } from '../../utils/precios';
 import { calcularPagina } from '../../utils/paginacion';
 import {
