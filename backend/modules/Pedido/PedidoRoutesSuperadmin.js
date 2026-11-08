@@ -6,8 +6,8 @@ import { superadmin } from '../../middlewares/AutenticacionMiddleware.js';
 const router = Router();
 
 // Solo superadmin puede acceder
-router.use(require('../../middlewares/AutenticacionMiddleware.js').proteger);
-router.use(require('../../middlewares/AutenticacionMiddleware.js').superadmin);
+router.use(proteger);
+router.use(superadmin);
 
 router.get('/', obtenerPedidosSuperadmin);
 router.patch('/:id/estado', cambiarEstadoPedidoSuperadmin);
