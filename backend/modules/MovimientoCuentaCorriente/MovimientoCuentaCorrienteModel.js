@@ -12,7 +12,6 @@ const movementSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Cliente',
       required: true,
-      index: true,
     },
     clienteNombre: {
       type: String,
@@ -22,7 +21,6 @@ const movementSchema = new mongoose.Schema(
     tienda: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Tienda',
-      index: true,
     },
     tipo: {
       type: String,

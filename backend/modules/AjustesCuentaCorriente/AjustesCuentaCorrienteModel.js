@@ -35,7 +35,6 @@ const ajustesSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Tienda',
       required: true,
-      index: true,
       unique: true,
     },
   },

@@ -49,7 +49,6 @@ const promocionSchema = new mongoose.Schema(
     tienda: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Tienda',
-      index: true,
     },
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' }, toJSON: { getters: true } }

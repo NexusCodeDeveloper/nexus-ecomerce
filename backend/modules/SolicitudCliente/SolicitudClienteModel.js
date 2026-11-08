@@ -29,7 +29,6 @@ const requestSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Usuario',
       required: true,
-      index: true,
     },
     solicitanteNombre: {
       type: String,
@@ -60,7 +59,6 @@ const requestSchema = new mongoose.Schema(
     tienda: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Tienda',
-      index: true,
     },
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' } }
