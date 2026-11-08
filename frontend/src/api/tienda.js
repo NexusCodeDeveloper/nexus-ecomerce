@@ -12,6 +12,6 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-export const obtenerMiTienda = () => api.get('/tienda');
-export const actualizarMiTienda = (data) => api.patch('/tienda', data);
-export const firmarSubidaCloudinary = () => api.post('/tienda/cloudinary/firma');
+export const obtenerMiTienda = () => api.get('/tiendas');
+export const actualizarMiTienda = (data) => api.patch('/tiendas', data);
+export const firmarSubidaCloudinary = () => api.post('/tiendas/cloudinary/firma');
