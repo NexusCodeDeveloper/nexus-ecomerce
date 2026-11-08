@@ -5,7 +5,8 @@ import { useCarrito } from '../context/carritoContexto';
 import ProductoCard from '../components/ProductoCard';
 import VariantesModal from '../components/VariantesModal';
 import CarritoPanel from '../components/CarritoPanel';
-import { hexARgb, construirLinkWhatsApp } from '../utils/catalogo';
+import { construirLinkWhatsApp } from '../utils/catalogo';
+import { cargarFuente, estiloTema, redesConValor } from '../utils/tema';
 
 const Catalogo = () => {
   const { slug } = useParams();
@@ -89,6 +90,12 @@ const Catalogo = () => {
     ? construirLinkWhatsApp(tienda.whatsapp, `¡Hola ${tienda.nombre}! Quiero hacer una consulta.`)
     : null;
 
+  const redes = redesConValor(tienda?.tema?.redes);
+
+  useEffect(() => {
+    cargarFuente(tienda?.tema?.tipografia);
+  }, [tienda?.tema?.tipografia]);
+
   if (cargando) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -108,7 +115,7 @@ const Catalogo = () => {
   return (
     <div
       className="min-h-screen pb-24"
-      style={{ '--tienda-primario': hexARgb(tienda?.tema?.colorPrimario) }}
+      style={estiloTema(tienda?.tema)}
     >
       <header className="relative">
         <div className="h-40 w-full overflow-hidden bg-marca/90">
@@ -116,6 +123,7 @@ const Catalogo = () => {
             <img src={tienda.tema.banner} alt="" className="h-full w-full object-cover" />
           )}
         </div>
+        <div className="h-1 w-full bg-secundario" />
         <div className="mx-auto -mt-10 max-w-5xl px-4">
           <div className="flex items-end gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             {tienda?.tema?.logo ? (
@@ -132,6 +140,21 @@ const Catalogo = () => {
             <div className="flex-1">
               <h1 className="text-lg font-bold text-slate-900">{tienda?.nombre}</h1>
               <p className="text-xs text-slate-400">/{tienda?.slug}</p>
+              {redes.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {redes.map((red) => (
+                    <a
+                      key={red.clave}
+                      href={red.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-500 transition hover:border-secundario hover:text-secundario"
+                    >
+                      {red.nombre}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {linkConsulta && (

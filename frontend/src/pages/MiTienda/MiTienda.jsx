@@ -1,279 +1,400 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { obtenerMiTienda, actualizarMiTienda } from '../../api/tienda';
+import { urlCatalogo } from '../../utils/apiBase';
 import { useApi } from '../../hooks/useApi';
 import { useAutenticacion } from '../../context/autenticacionContexto';
-import { obtenerMiTienda, actualizarMiTienda, firmarSubidaCloudinary } from '../../api/tienda';
-import { useIosAlert } from '../components/alerts';
+import { useIosAlert } from '../../components/alerts';
 import { obtenerMensajeErrorApi } from '../../utils/apiError';
-import { formatearMoneda } from '../../utils/format';
-import { hexARgb } from '../../utils/catalogo';
-import { SubirImagen } from '../components/SubirImagen';
+import { COLORES_PREDEFINIDOS, FUENTES_DISPONIBLES, REDES_DISPONIBLES, estiloTema } from '../../utils/tema';
+import { IosField, IosInput, IosSelect } from '../../components/ui/IosForm';
+import IosButton from '../../components/ui/IosButton';
+import LoadingSpinner from '../../components/common/LoadingSpinner';
+import SubirImagen from '../../components/SubirImagen/SubirImagen';
 
 const TABS = [
-  { id: 'datos', label: 'Datos', icon: '📋' },
-  { id: 'diseno', label: 'Diseño', icon: '🎨' },
-  { id: 'pagos', label: 'Pagos', icon: '💳' },
-  { id: 'imagenes', label: 'Imágenes', icon: '🖼️' },
+  { id: 'datos', label: 'Datos' },
+  { id: 'diseno', label: 'Diseño' },
+  { id: 'pagos', label: 'Pagos' },
+  { id: 'imagenes', label: 'Imágenes' },
 ];
 
-const COLORES_PREDEFINIDOS = [
-  '#0A84FF', '#FF9F0A', '#FF453A', '#FF9500', '#AF52DE', '#00C7BE',
-  '#32D74B', '#FF2D55', '#5E5CE6', '#007AFF', '#8E8E93', '#8E8E93',
-];
+const TEMA_VACIO = {
+  colorPrimario: '#0A84FF',
+  colorSecundario: '#FF9F0A',
+  tipografia: 'Inter',
+  logo: '',
+  banner: '',
+  redes: { instagram: '', facebook: '', tiktok: '' },
+};
 
-const FUENTES_DISPONIBLES = [
-  { valor: 'Inter', etiqueta: 'Inter' },
-  { valor: 'Poppins', etiqueta: 'Poppins' },
-  { valor: 'Roboto', etiqueta: 'Roboto' },
-  { valor: 'Montserrat', etiqueta: 'Montserrat' },
-  { valor: 'Open Sans', etiqueta: 'Open Sans' },
-  { valor: 'Lato', etiqueta: 'Lato' },
-  { valor: 'Nunito', etiqueta: 'Nunito' },
-  { valor: 'Roboto Slab', etiqueta: 'Roboto Slab' },
-];
+const FORM_VACIO = {
+  nombre: '',
+  whatsapp: '',
+  telefono: '',
+  modoVenta: 'ambos',
+  pago: { alias: '', cbu: '', titular: '', banco: '' },
+  tema: TEMA_VACIO,
+};
 
 const MiTienda = () => {
-  const { usuario, tienda } = useAutenticacion();
-  const navigate = useNavigate();
+  const { esAdmin } = useAutenticacion();
   const { toast } = useIosAlert();
   const [tabActiva, setTabActiva] = useState('datos');
-  const [guardando, setGuardando] = useState(false);
-  const [subiendoImagen, setSubiendoImagen] = useState(false);
-  const [error, setError] = useState('');
-  const [exito, setExito] = useState('');
-  const [form, setForm] = useState({
-    nombre: '',
-    whatsapp: '',
-    telefono: '',
-    email: '',
-    modoVenta: 'ambos',
-    pago: { alias: '', cbu: '', titular: '', banco: '' },
-    tema: {
-      colorPrimario: '#0A84FF',
-      colorSecundario: '#FF9F0A',
-      tipografia: 'Inter',
-      logo: '',
-      banner: '',
-      redes: { instagram: '', facebook: '', tiktok: '' },
-    },
-    pago: { alias: '', cbu: '', titular: '', banco: '' },
-  });
+  const [form, setForm] = useState(FORM_VACIO);
+  const [slug, setSlug] = useState('');
+  const [email, setEmail] = useState('');
   const [logoPreview, setLogoPreview] = useState('');
   const [bannerPreview, setBannerPreview] = useState('');
-  const [cargando, setCargando] = useState(true);
-  const [subiendoLogo, setSubiendoLogo] = useState(false);
-  const [subiendoBanner, setSubiendoBanner] = useState(false);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState('');
+  const [exito, setExito] = useState('');
+
+  const { data, loading, error: errorCarga } = useApi(
+    async () => {
+      const res = await obtenerMiTienda();
+      return res.data;
+    },
+    { mensajeError: 'No se pudo cargar la información de la tienda' }
+  );
 
   useEffect(() => {
-    const cargar = async () => {
-      try {
-        const res = await fetch('/api/tienda', {
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setForm({
-            nombre: data.nombre || '',
-            whatsapp: data.whatsapp || '',
-            telefono: data.telefono || '',
-            email: data.email || '',
-            modoVenta: data.modoVenta || 'ambos',
-            pago: data.pago || { alias: '', cbu: '', titular: '', banco: '' },
-            tema: {
-              colorPrimario: data.tema?.colorPrimario || '#0A84FF',
-              colorSecundario: data.tema?.colorSecundario || '#FF9F0A',
-              tipografia: data.tema?.tipografia || 'Inter',
-              logo: data.tema?.logo || '',
-              banner: data.tema?.banner || '',
-              redes: data.tema?.redes || { instagram: '', facebook: '', tiktok: '' },
-            },
-            pago: data.pago || { alias: '', cbu: '', titular: '', banco: '' },
-          });
-          if (data.tema?.logo) setLogoPreview(data.tema.logo);
-          if (data.tema?.banner) setBannerPreview(data.tema.banner);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setCargando(false);
-      }
-    };
-    cargar();
-  }, []);
+    if (!data) return;
+    const tema = data.tema || {};
+    setSlug(data.slug || '');
+    setEmail(data.email || '');
+    setForm({
+      nombre: data.nombre || '',
+      whatsapp: data.whatsapp || '',
+      telefono: data.telefono || '',
+      modoVenta: data.modoVenta || 'ambos',
+      pago: { ...FORM_VACIO.pago, ...(data.pago || {}) },
+      tema: {
+        ...TEMA_VACIO,
+        ...tema,
+        redes: { ...TEMA_VACIO.redes, ...(tema.redes || {}) },
+      },
+    });
+    setLogoPreview(tema.logo || '');
+    setBannerPreview(tema.banner || '');
+  }, [data]);
 
   const actualizarCampo = (campo, valor) => {
     setForm((actual) => ({ ...actual, [campo]: valor }));
   };
 
-  const actualizarCampoAnidado = (padre, campo, valor) => {
-    setForm((actual) => ({
-      ...actual,
-      [padre]: { ...actual[padre], [campo]: valor },
-    });
+  const actualizarPago = (campo, valor) => {
+    setForm((actual) => ({ ...actual, pago: { ...actual.pago, [campo]: valor } }));
   };
 
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    if (type === 'checkbox') {
-      setForm((actual) => ({ ...actual, [name]: checked }));
-    } else {
-      setForm((actual) => ({ ...actual, [name]: value }));
-    }
+  const actualizarTema = (campo, valor) => {
+    setForm((actual) => ({ ...actual, tema: { ...actual.tema, [campo]: valor } }));
   };
 
-  const handleChangeAnidado = (padre, campo, valor) => {
+  const actualizarRed = (campo, valor) => {
     setForm((actual) => ({
       ...actual,
-      [padre]: { ...actual[padre], [campo]: valor },
-    });
+      tema: { ...actual.tema, redes: { ...actual.tema.redes, [campo]: valor } },
+    }));
   };
 
   const guardar = async () => {
-    setGuardando(true);
+    if (guardando) return;
     setError('');
+    setExito('');
+    setGuardando(true);
     try {
-      const res = await fetch('/api/tienda', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
-        body: JSON.stringify(form),
+      await actualizarMiTienda({
+        nombre: form.nombre.trim(),
+        whatsapp: form.whatsapp.trim(),
+        telefono: form.telefono.trim(),
+        modoVenta: form.modoVenta,
+        pago: form.pago,
+        tema: { ...form.tema, logo: logoPreview, banner: bannerPreview },
       });
-      if (!res.ok) throw new Error('Error al guardar');
-      const data = await res.json();
+      setExito('Cambios guardados');
       toast({ message: 'Cambios guardados', type: 'success' });
     } catch (err) {
-      toast({ message: 'Error al guardar', type: 'error' });
+      const mensaje = obtenerMensajeErrorApi(err, 'No se pudieron guardar los cambios');
+      setError(mensaje);
+      toast({ message: mensaje, type: 'error' });
     } finally {
       setGuardando(false);
     }
   };
 
-  const subirImagen = async (tipo) => {
-    if (!window.turnstile && document.querySelector('script[src*="turnstile"]')) {
-      // Turnstile ya cargado
-    }
-    setSubiendoImagen(true);
-    try {
-      // 1. Obtener firma
-      const resFirma = await fetch('/api/tienda/cloudinary/firma', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-      });
-      if (!res.ok) throw new Error('Cloudinary no configurado');
-      const { signature, timestamp, folder, apiKey, cloudName } = await res.json();
-
-      // 2. Subir a Cloudinary
-      const formData = new FormData();
-      formData.append('file', fileRef.current.files[0]);
-      formData.append('api_key', 'YOUR_API_KEY'); // Se completa desde la firma
-      formData.append('timestamp', timestamp);
-      formData.append('signature', signature);
-      formData.append('folder', folder);
-
-      const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || 'Error al subir');
-
-      // Actualizar preview y formulario
-      if (tipo === 'logo') {
-        setLogoPreview(data.secure_url);
-        setForm((a) => ({ ...a, tema: { ...a.tema, logo: data.secure_url } }));
-      } else {
-        setBannerPreview(data.secure_url);
-        setForm((a) => ({ ...a, tema: { ...a.tema, banner: data.secure_url } }));
-      }
-      toast({ message: 'Imagen subida', type: 'success' });
-    } catch (err) {
-      toast({ message: 'Error al subir imagen', type: 'error' });
-    } finally {
-      setSubiendoImagen(false);
-    }
-  };
-
-  if (cargando) {
+  if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-ios-bg">
+      <div className="flex min-h-[50vh] items-center justify-center">
         <LoadingSpinner size="h-10 w-10" />
       </div>
     );
   }
 
+  if (errorCarga) {
+    return <p className="text-sm text-ios-red">{errorCarga}</p>;
+  }
+
   return (
-    <div
-      className="min-h-screen bg-ios-bg"
-      style={{ '--tienda-primario': hexARgb(form.tema?.colorPrimario || '#0A84FF') }}
-    >
-      <header className="sticky top-0 z-20 border-b border-ios-separator/40 bg-ios-surface/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-4 md:px-6 h-14 flex items-center gap-4">
-          <span className="font-semibold text-ios-label">Mi Tienda</span>
-          <nav className="flex items-center gap-1 ml-2">
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setTabActiva(tab.id)}
-                className={`px-3 py-1.5 rounded-ios-pill text-sm font-medium transition ${
-                  tabActiva === tab.id
-                    ? 'bg-ios-tint text-white'
-                    : 'text-ios-secondary hover:bg-ios-hover'
-                  }`}
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-ios-label">Mi Tienda</h1>
+          <p className="text-sm text-ios-secondary">Personalizá tu catálogo online y tus datos de contacto.</p>
+        </div>
+        {slug && (
+          <a
+            href={urlCatalogo(slug)}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-full border border-ios-separator/50 px-4 py-2 text-sm font-semibold text-ios-secondary transition hover:bg-ios-hover"
+          >
+            Ver catálogo /{slug}
+          </a>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setTabActiva(tab.id)}
+            className={`rounded-ios-pill px-3.5 py-2 text-sm font-medium transition ${
+              tabActiva === tab.id
+                ? 'bg-ios-tint text-white'
+                : 'border border-ios-separator/40 bg-ios-surface text-ios-secondary hover:bg-ios-hover'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {error && <p className="text-sm text-ios-red">{error}</p>}
+      {exito && <p className="text-sm text-emerald-600">{exito}</p>}
+
+      <div className="rounded-3xl border border-ios-separator/40 bg-ios-surface p-4 md:p-6">
+        {tabActiva === 'datos' && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <IosField label="Nombre del comercio" required>
+              <IosInput
+                value={form.nombre}
+                onChange={(e) => actualizarCampo('nombre', e.target.value)}
+                placeholder="Tu comercio"
+              />
+            </IosField>
+            <IosField label="WhatsApp" required hint="Se usa para coordinar envíos y consultas.">
+              <IosInput
+                value={form.whatsapp}
+                onChange={(e) => actualizarCampo('whatsapp', e.target.value)}
+                placeholder="Ej: 5491123456789"
+              />
+            </IosField>
+            <IosField label="Teléfono">
+              <IosInput
+                value={form.telefono}
+                onChange={(e) => actualizarCampo('telefono', e.target.value)}
+                placeholder="Opcional"
+              />
+            </IosField>
+            <IosField label="Modo de venta">
+              <IosSelect
+                value={form.modoVenta}
+                onChange={(e) => actualizarCampo('modoVenta', e.target.value)}
               >
-                <span className="flex items-center gap-1.5">
-                  <span className="text-lg">{tab.icon}</span>
-                  {tab.label}
-                </span>
-              </NavLink>
-            ))}
-          </nav>
-          <div className="ml-auto flex items-center gap-2">
-            <span className="hidden sm:block text-xs text-ios-tertiary">{usuario?.email}</span>
+                <option value="ambos">Local y catálogo</option>
+                <option value="local">Solo local</option>
+                <option value="catalogo">Solo catálogo</option>
+              </IosSelect>
+            </IosField>
+            <IosField label="Email de la cuenta" hint="Para cambiar el email escribinos por soporte.">
+              <IosInput value={email} readOnly className="opacity-70" />
+            </IosField>
+            <IosField label="Nombre de la tienda (link)" hint="El link del catálogo no se puede modificar desde acá.">
+              <IosInput value={slug ? `/${slug}` : ''} readOnly className="opacity-70" />
+            </IosField>
           </div>
-        </div>
-      </header>
+        )}
 
-      <main className="max-w-6xl mx-auto px-4 md:px-6 py-6 animate-ios-page">
-        {error && <p className="mb-4 text-sm text-red-500">{error}</p>}
-        {exito && <p className="mb-4 text-sm text-emerald-600">{exito}</p>}
+        {tabActiva === 'diseno' && (
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className="space-y-5">
+              <IosField label="Color primario">
+                <div className="flex flex-wrap items-center gap-2">
+                  {COLORES_PREDEFINIDOS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => actualizarTema('colorPrimario', color)}
+                      className={`h-8 w-8 rounded-full border-2 transition ${
+                        form.tema.colorPrimario?.toLowerCase() === color.toLowerCase()
+                          ? 'border-ios-label scale-110'
+                          : 'border-transparent'
+                      }`}
+                      style={{ backgroundColor: color }}
+                      aria-label={`Color ${color}`}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={form.tema.colorPrimario}
+                    onChange={(e) => actualizarTema('colorPrimario', e.target.value)}
+                    className="h-8 w-10 cursor-pointer rounded-lg border border-ios-separator/40 bg-transparent"
+                    aria-label="Elegir color primario"
+                  />
+                </div>
+              </IosField>
 
-        <div className="flex flex-wrap gap-2 mb-4">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setTabActiva(tab.id)}
-              className={`px-3 py-1.5 rounded-ios-pill text-sm font-medium transition ${
-                tabActiva === tab.id
-                  ? 'bg-ios-tint text-white'
-                : 'bg-ios-surface text-ios-secondary border border-ios-separator/40 hover:bg-ios-hover'
-              }`}
-            >
-              <span className="flex items-center gap-1.5">
-                <span className="text-lg">{tab.icon}</span>
-                {tab.label}
-              </span>
-            </button>
-          ))}
-        </div>
+              <IosField label="Color secundario">
+                <div className="flex flex-wrap items-center gap-2">
+                  {COLORES_PREDEFINIDOS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => actualizarTema('colorSecundario', color)}
+                      className={`h-8 w-8 rounded-full border-2 transition ${
+                        form.tema.colorSecundario?.toLowerCase() === color.toLowerCase()
+                          ? 'border-ios-label scale-110'
+                          : 'border-transparent'
+                      }`}
+                      style={{ backgroundColor: color }}
+                      aria-label={`Color ${color}`}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={form.tema.colorSecundario}
+                    onChange={(e) => actualizarTema('colorSecundario', e.target.value)}
+                    className="h-8 w-10 cursor-pointer rounded-lg border border-ios-separator/40 bg-transparent"
+                    aria-label="Elegir color secundario"
+                  />
+                </div>
+              </IosField>
 
-        {tabActiva === 'datos' && <DatosTab form={form} onChange={handleChange} guardando={guardando} onGuardar={guardar} />}
-        {tabActiva === 'diseno' && <DisenoTab form={form} onChange={handleChangeAnidado} />}
-        {tabActiva === 'pagos' && <PagosTab form={form} onChange={handleChangeAnidado} />}
-        {tabActiva === 'imagenes' && <ImagenesTab
-          logoPreview={logoPreview}
-          bannerPreview={bannerPreview}
-          subiendoLogo={subiendoLogo}
-          subiendoBanner={subiendoBanner}
-          onSubirLogo={() => setSubiendoLogo(true)}
-          onSubirBanner={() => setSubiendoBanner(true)}
-          onCambiarLogo={(url) => { setLogoPreview(url); setForm(a => ({...a, tema: {...a.tema, logo: url}})); }}
-          onCambiarBanner={(url) => { setBannerPreview(url); setForm(a => ({...a, tema: {...a.tema, banner: url}})); }}
-        />}
+              <IosField label="Tipografía">
+                <IosSelect
+                  value={form.tema.tipografia}
+                  onChange={(e) => actualizarTema('tipografia', e.target.value)}
+                >
+                  {FUENTES_DISPONIBLES.map((fuente) => (
+                    <option key={fuente.valor} value={fuente.valor}>{fuente.etiqueta}</option>
+                  ))}
+                </IosSelect>
+              </IosField>
 
-        {exito && <p className="mt-4 text-center text-sm text-emerald-600">{exito}</p>}
-        {error && <p className="mt-4 text-center text-red-500">{error}</p>}
-      </main>
+              <div className="space-y-3">
+                <p className="text-[13px] font-medium text-ios-secondary">Redes sociales</p>
+                {REDES_DISPONIBLES.map((red) => (
+                  <IosField key={red.clave} label={red.etiqueta}>
+                    <IosInput
+                      value={form.tema.redes[red.clave]}
+                      onChange={(e) => actualizarRed(red.clave, e.target.value)}
+                      placeholder={red.placeholder}
+                    />
+                  </IosField>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 text-[13px] font-medium text-ios-secondary">Vista previa</p>
+              <div className="overflow-hidden rounded-2xl border border-ios-separator/40" style={estiloTema(form.tema)}>
+                <div className="flex h-24 items-center justify-center text-white" style={{ backgroundColor: 'rgb(var(--tienda-primario))' }}>
+                  {logoPreview ? (
+                    <img src={logoPreview} alt="Logo" className="h-16 w-16 rounded-full border-2 border-white/60 object-cover" />
+                  ) : (
+                    <span className="text-2xl font-bold">{form.nombre?.charAt(0)?.toUpperCase() || '?'}</span>
+                  )}
+                </div>
+                <div className="space-y-2 bg-white p-4">
+                  <p className="text-base font-bold text-slate-900">{form.nombre || 'Tu comercio'}</p>
+                  <p className="text-xs text-slate-400">Catálogo online</p>
+                  <div className="flex gap-2 pt-1">
+                    <span className="rounded-full px-3 py-1 text-xs font-semibold text-white" style={{ backgroundColor: 'rgb(var(--tienda-primario))' }}>
+                      Comprar
+                    </span>
+                    <span className="rounded-full px-3 py-1 text-xs font-semibold text-white" style={{ backgroundColor: 'rgb(var(--tienda-secundario))' }}>
+                      Ver más
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tabActiva === 'pagos' && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <IosField label="Alias">
+              <IosInput
+                value={form.pago.alias}
+                onChange={(e) => actualizarPago('alias', e.target.value)}
+                placeholder="Ej: mi.tienda.mp"
+              />
+            </IosField>
+            <IosField label="CBU / CVU">
+              <IosInput
+                value={form.pago.cbu}
+                onChange={(e) => actualizarPago('cbu', e.target.value)}
+                placeholder="Número de cuenta"
+              />
+            </IosField>
+            <IosField label="Titular">
+              <IosInput
+                value={form.pago.titular}
+                onChange={(e) => actualizarPago('titular', e.target.value)}
+                placeholder="Nombre del titular"
+              />
+            </IosField>
+            <IosField label="Banco">
+              <IosInput
+                value={form.pago.banco}
+                onChange={(e) => actualizarPago('banco', e.target.value)}
+                placeholder="Banco o billetera"
+              />
+            </IosField>
+            <p className="text-xs text-ios-tertiary sm:col-span-2">
+              Estos datos se muestran al comprador al finalizar el pedido por transferencia.
+            </p>
+          </div>
+        )}
+
+        {tabActiva === 'imagenes' && (
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <div>
+              <p className="mb-2 text-[13px] font-medium text-ios-secondary">Logo</p>
+              <SubirImagen
+                tipo="logo"
+                valor={logoPreview}
+                etiqueta="Subir logo"
+                onSubida={(url) => setLogoPreview(url)}
+                onQuitar={() => setLogoPreview('')}
+              />
+              <p className="mt-2 text-xs text-ios-tertiary">Recomendado: imagen cuadrada.</p>
+            </div>
+            <div>
+              <p className="mb-2 text-[13px] font-medium text-ios-secondary">Banner</p>
+              <SubirImagen
+                tipo="banner"
+                valor={bannerPreview}
+                etiqueta="Subir banner"
+                onSubida={(url) => setBannerPreview(url)}
+                onQuitar={() => setBannerPreview('')}
+              />
+              <p className="mt-2 text-xs text-ios-tertiary">Recomendado: imagen horizontal.</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-end gap-3">
+        {!esAdmin && (
+          <p className="mr-auto text-xs text-ios-tertiary">Solo un administrador puede guardar cambios.</p>
+        )}
+        <IosButton onClick={guardar} disabled={guardando || !esAdmin}>
+          {guardando ? 'Guardando…' : 'Guardar cambios'}
+        </IosButton>
+      </div>
     </div>
   );
 };

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { crearPedido, obtenerTienda } from '../api/publico';
 import { useCarrito } from '../context/carritoContexto';
-import { formatearMoneda, hexARgb } from '../utils/catalogo';
+import { formatearMoneda } from '../utils/catalogo';
+import { cargarFuente, estiloTema } from '../utils/tema';
 
 const formularioVacio = { nombre: '', telefono: '', email: '', direccion: '', nota: '' };
 
@@ -20,6 +21,10 @@ const Checkout = () => {
       .then((res) => setTienda(res.data))
       .catch(() => {});
   }, [slug]);
+
+  useEffect(() => {
+    cargarFuente(tienda?.tema?.tipografia);
+  }, [tienda?.tema?.tipografia]);
 
   const enviar = async (event) => {
     event.preventDefault();
@@ -63,7 +68,7 @@ const Checkout = () => {
     return (
       <div
         className="min-h-screen px-4 py-10"
-        style={{ '--tienda-primario': hexARgb(tienda?.tema?.colorPrimario) }}
+        style={estiloTema(tienda?.tema)}
       >
         <div className="mx-auto max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <p className="text-center text-4xl">🎉</p>
@@ -125,7 +130,7 @@ const Checkout = () => {
   return (
     <div
       className="min-h-screen px-4 py-8"
-      style={{ '--tienda-primario': hexARgb(tienda?.tema?.colorPrimario) }}
+      style={estiloTema(tienda?.tema)}
     >
       <div className="mx-auto max-w-2xl">
         <Link to={`/${slug}`} className="text-sm font-semibold text-marca">
