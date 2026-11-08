@@ -125,9 +125,6 @@ export const actualizarCliente = async (req, res, next) => {
       data,
       { new: true, runValidators: true }
     );
-      new: true,
-      runValidators: true,
-    });
     if (!customer) {
       return res.status(404).json({ message: 'Cliente no encontrado' });
     }

@@ -207,7 +207,7 @@ export const actualizarMovimiento = async (req, res, next) => {
   try {
     await buscarCliente(req, req.params.clienteId);
     const data = schemaActualizarMovimiento.parse(req.body);
-    const movimiento = await obtenerMovimiento(req.params.clienteId, req.params.movimientoId);
+    const movimiento = await obtenerMovimiento(req, req.params.clienteId, req.params.movimientoId);
     exigirActivo(movimiento);
 
     const cambios = {};
@@ -258,7 +258,7 @@ export const anularMovimiento = async (req, res, next) => {
   try {
     await buscarCliente(req, req.params.clienteId);
     const data = schemaAnularMovimiento.parse(req.body);
-    const movimiento = await obtenerMovimiento(req.params.clienteId, req.params.movimientoId);
+    const movimiento = await obtenerMovimiento(req, req.params.clienteId, req.params.movimientoId);
     exigirActivo(movimiento);
 
     const anulado = await MovimientoCuentaCorriente.findByIdAndUpdate(
