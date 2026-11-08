@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { campoCentavosPositivo } from '../../utils/DineroUtils.js';
+import { asegurarCodigosVariante } from '../../utils/CodigosVarianteUtils.js';
 
 const variantSubSchema = new mongoose.Schema({
   talle: { type: String, trim: true, default: '' },
@@ -7,6 +8,7 @@ const variantSubSchema = new mongoose.Schema({
   cantidad: { type: Number, required: true, min: 0, default: 0 },
   deposito: { type: Number, min: 0, default: 0 },
   catalogo: { type: Number, min: 0, default: 0 },
+  codigo: { type: String, trim: true, uppercase: true },
 }, { _id: false });
 
 const productSchema = new mongoose.Schema(
@@ -69,6 +71,23 @@ const productSchema = new mongoose.Schema(
       default: 2,
       min: 0,
     },
+    siguienteSufijoVariante: {
+      type: Number,
+      default: 1,
+      min: 1,
+    },
+    enPapelera: {
+      type: Boolean,
+      default: false,
+    },
+    eliminadoEn: {
+      type: Date,
+    },
+    eliminadoPor: {
+      type: String,
+      trim: true,
+      default: '',
+    },
   },
   { timestamps: { createdAt: 'fechaCreacion', updatedAt: 'fechaActualizacion' }, toJSON: { getters: true } }
 );
@@ -77,6 +96,7 @@ productSchema.pre('save', function (next) {
   if (this.variantes?.length > 0) {
     this.cantidad = this.variantes.reduce((sum, v) => sum + v.cantidad, 0);
     this.catalogo = this.variantes.reduce((sum, v) => sum + (v.catalogo || 0), 0);
+    asegurarCodigosVariante(this);
   }
   next();
 });
@@ -84,5 +104,8 @@ productSchema.pre('save', function (next) {
 productSchema.index({ nombre: 'text' });
 productSchema.index({ tienda: 1, categoria: 1 });
 productSchema.index({ tienda: 1, codigo: 1 }, { unique: true, partialFilterExpression: { codigo: { $type: 'string' } } });
+productSchema.index({ nombre: 1, _id: 1 });
+productSchema.index({ categoria: 1 });
+productSchema.index({ enPapelera: 1, nombre: 1 });
 
 export default mongoose.model('Producto', productSchema, 'productos');

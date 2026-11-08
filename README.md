@@ -34,11 +34,6 @@ npm run dev            # backend (nodemon, puerto 5000) + frontend (Vite, puerto
 | `npm test` | Tests del backend (node:test) y del frontend (vitest) |
 | `npm test --prefix backend` | Solo tests del backend |
 | `npm test --prefix frontend` | Solo tests del frontend |
-| `npm run migrar:dinero --prefix backend` | Dry-run de la migración de montos a centavos |
-| `npm run migrar:dinero:aplicar --prefix backend` | Aplica la migración (hace backup antes) |
-| `npm run auditoria:datos --prefix backend` | Diagnóstico de datos (solo lectura): legacy, huérfanos, descuadres |
-| `npm run reparar:datos --prefix backend` | Dry-run de reparación de datos |
-| `npm run reparar:datos:aplicar --prefix backend` | Aplica la reparación (hace backup antes) |
 
 Si `npm test` falla con `Cannot find package 'mongodb-memory-server'`, faltan las dependencias de
 desarrollo del backend: corré `npm ci --include=dev --prefix backend`. En Windows, los tests de
@@ -50,7 +45,8 @@ código `3221225781` / `0xC0000135`, instalalo desde https://aka.ms/vs/17/releas
 - **Tests de integración**: `npm test --prefix backend` levanta una base MongoDB en memoria y ejecuta
   los flujos críticos (venta, borrado, devolución total y su reversión, cambio con ticket legacy,
   cierre, disponible de caja, migración de ventas, seguridad y avisos). Los tests del frontend
-  (`npm test --prefix frontend`, Vitest) cubren helpers de formato, totales y stock por variante.
+  (`npm test --prefix frontend`, Vitest) cubren helpers de formato, paginación, totales y stock por
+  variante. Los tests viven en `backend/tests/` y `frontend/tests/` respectivamente.
   La CI corre ambos en cada push.
 - **Ventas legacy**: al arrancar, las ventas sin `articulos[]` se migran solas al formato nuevo.
 - **Cierres**: no se pueden borrar ventas, retiros ni devoluciones que ya forman parte de una caja
@@ -67,26 +63,27 @@ código `3221225781` / `0xC0000135`, instalalo desde https://aka.ms/vs/17/releas
 - **Productos**: no se pueden agregar variantes a un producto con stock general (se rechaza para no
   perder unidades) ni eliminar productos con ventas, devoluciones o movimientos asociados.
 - **Migración de dinero**: el marcador se reclama antes de tocar datos y se saltan los documentos
-  creados después de iniciada, evitando la doble conversión ×100. **Detené el servidor antes de
-  aplicar la migración.** Verificación: `node scripts/migrar-dinero.js --verify` (parado en
-  `backend/`).
+  creados después de iniciada, evitando la doble conversión ×100.
 
 ## Caja del día
 
-La caja funciona con **una apertura y un cierre por día**:
+La caja funciona con **una apertura por turno y cierres por turno (mañana, tarde o día completo)**:
 
 - **Abrir caja** (cualquier usuario): pide el nombre de quien abre y, opcionalmente, el fondo
   inicial (la plata que ya hay en la caja). Sin caja abierta **no se puede vender, devolver,
-  cambiar ni retirar efectivo**.
-- **Cerrar caja**: pide el nombre de quien cierra, muestra un resumen previo y al confirmar guarda
-  los totales y **envía el mail del día** (apertura y cierre con nombres y horarios, totales por
-  método, unidades, devoluciones, retiros, reintegros y efectivo esperado). El cierre es atómico:
-  reclama la caja y **mientras se está cerrando no se puede vender, retirar ni borrar operaciones**
-  (si el servidor se cae a mitad del cierre, al reintentar el cierre se reanuda solo). El
-  **efectivo esperado** queda guardado en el cierre, así el historial no lo recalcula.
-- **Reabrir caja** (solo admin): si la caja de hoy ya fue cerrada, el admin puede reabrirla las
-  veces que necesite, cargando su nombre. Cada reapertura queda registrada y al volver a cerrar se
-  recalculan los totales y se envía un mail actualizado ("Caja reabierta · actualizado").
+  cambiar ni retirar efectivo**. Después de cerrar la mañana se puede abrir una caja nueva para la
+  tarde; no se puede abrir una tercera caja si ya se cerraron mañana y tarde.
+- **Cerrar caja**: pide el nombre de quien cierra, el **turno** (Mañana, Tarde o Día completo) y
+  muestra un resumen previo. Al confirmar guarda los totales y **envía el mail del turno**
+  (apertura y cierre con nombres y horarios, totales por método, unidades, devoluciones, retiros,
+  reintegros y efectivo esperado). El cierre es atómico: reclama la caja y **mientras se está
+  cerrando no se puede vender, retirar ni borrar operaciones** (si el servidor se cae a mitad del
+  cierre, al reintentar el cierre se reanuda solo). El **efectivo esperado** queda guardado en el
+  cierre, así el historial no lo recalcula.
+- **Reporte del total del día**: al cerrar el turno **Tarde** se puede pedir (activado por defecto)
+  un correo adicional con el día completo: totales, retiros, devoluciones, reintegros, cobros de
+  cuenta corriente, efectivo esperado, **desglose por turno** y el listado de ventas del día. Se
+  puede reenviar desde el historial de Cierres (fila agrupada por día).
 - **Caja de un día anterior**: si quedó una caja abierta, vender, devolver, cambiar y retirar
   quedan bloqueados hasta cerrarla (el aviso indica la fecha). La caja se cierra con aviso si es de
   un día anterior.
@@ -94,9 +91,9 @@ La caja funciona con **una apertura y un cierre por día**:
   retiros se lleva **por caja** (no por día), así no depende de la zona horaria del navegador y no
   se puede retirar de más con operaciones simultáneas.
 - El historial de Cierres muestra solo cajas cerradas, con estado, quién abrió/cerró y los totales.
-  Los cierres viejos (mañana/tarde) se siguen viendo igual.
+  La vista por día agrupa mañana y tarde con el total del día.
 - Endpoints: `POST /api/ventas/caja/abrir`, `GET /api/ventas/caja/abierta`,
-  `POST /api/ventas/caja/cerrar` y `POST /api/ventas/caja/reabrir` (admin).
+  `POST /api/ventas/caja/cerrar` y `POST /api/ventas/cierres-caja/reporte-dia` (admin).
 
 ## Sesiones y seguridad
 
@@ -118,13 +115,8 @@ La caja funciona con **una apertura y un cierre por día**:
 ## Migración de montos a centavos
 
 Los montos se guardan en la base como **enteros en centavos** y la API los expone como
-decimales (getters de Mongoose). La migración ya fue aplicada a la base de desarrollo.
-
-- Script: `backend/scripts/migrar-dinero.js`
-- Dry-run: `npm run migrar:dinero --prefix backend`
-- Aplicar: `npm run migrar:dinero:aplicar --prefix backend` (requiere confirmación implícita del flag)
-- Antes de aplicar, el script guarda un backup JSON en `backend/backups/`
-- Es idempotente: usa el marcador `migrations._id = "money-cents-v1"`
+decimales (getters de Mongoose). La migración ya fue aplicada a la base de desarrollo y es
+idempotente: usa el marcador `migrations._id = "money-cents-v1"`.
 
 ## Deploy (opcional)
 
@@ -222,19 +214,41 @@ Todo el stock entra al depósito y desde ahí se carga el salón:
 - Endpoints: `PUT /api/productos/:id/deposito` (admin), `POST /api/productos/:id/reponer` (admin y
   empleado), `POST /api/productos/:id/retirar` (admin) y `GET /api/movimientos-stock` (admin).
 
+## Papelera de productos
+
+Los productos se pueden **eliminar y editar siempre** (solo admin). Al eliminar, el producto se mueve a la **Papelera**
+en lugar de borrarse:
+
+- La confirmación de eliminar avisa siempre que **las ventas y tickets ya emitidos no se actualizan**: el historial queda
+  como está y los cambios aplican solo a futuras ventas. Si el producto tiene ventas, la confirmación indica cuántas.
+- Mientras está en la papelera el producto se oculta del catálogo, del buscador, de las categorías, del escaneo y de las
+  ventas, pero **conserva su stock** y todo su historial.
+- Editar un producto también avisa que las ventas ya realizadas no se actualizan.
+- El nombre del producto en la papelera queda libre: podés crear uno nuevo con el mismo nombre. Si querés restaurar el
+  original y ya existe otro activo con ese nombre, el sistema lo impide hasta que lo renombres.
+- La página **Papelera** (menú lateral, solo admin) lista los productos eliminados con quién y cuándo los eliminó, y permite
+  **Restaurar** (vuelve al catálogo con su stock) o **Eliminar definitivamente** (borra el producto; las ventas, devoluciones
+  y movimientos se conservan como historial con el nombre congelado).
+
+Endpoints: `DELETE /api/productos/:id` (mover a la papelera), `PUT /api/productos/:id/restaurar` y
+`DELETE /api/productos/:id/definitivo` (admin).
+
 ## Códigos de barras y QR
 
 Cada producto tiene un **código interno** único (`NC-000001`) que se genera automáticamente al crearlo y no se puede editar.
+Cada **variante** (talle/color) recibe además su propio código estable: `NC-000001-01`, `NC-000001-02`, etc. Los códigos de variante se asignan al crear o editar el producto y, al arrancar el backend, una migración automática completa los productos que ya existían (los códigos no se reutilizan al borrar variantes).
 
 - **Código automático:** al abrir "Nuevo Producto" el código ya aparece generado y en solo lectura; no se puede
   escribir, escanear ni cambiar después. El servidor garantiza que no existan dos códigos iguales.
 - **Pistola lectora:** funciona en toda la app (Productos, Tickets, Devoluciones y formularios); detecta la
   ráfaga de tecleo + Enter. Si tu pistola no envía Enter, configurá el sufijo en el lector.
 - **Cámara del celular:** botón de cámara junto al buscador de Productos y en el carrito.
-  Requiere HTTPS; por IP local `http://192.168.x.x` el navegador bloquea la cámara.
-- **Escanear para vender:** con productos en el carrito, escanear agrega directo (si el producto
-  tiene variantes, se abre el selector). En mobile, abrí el carrito con el botón "Carrito" y usá
-  "Escanear" para agregar en serie.
+  Requiere HTTPS; por IP local `http://192.168.x.x` el navegador bloquea la cámara. En Productos la cámara abre en
+  **modo continuo** para escanear varios productos seguidos.
+- **Escanear para vender (automático):** al escanear, el producto se agrega directo al carrito (también con el carrito
+  vacío) y el carrito se abre con la fila recién agregada **resaltada en verde por unos segundos**. Si el producto tiene
+  variantes, el código de la variante define el talle/color exacto; si se escanea un código viejo a nivel producto con
+  varias variantes, se abre el selector.
 - **Tickets:** el ticket impreso incluye un QR con el número y el código de barras Code-128 de cada
   producto. En Tickets podés buscar por número de ticket o escanear el código de un producto para ver
   las ventas que lo contienen y hacer la devolución o el cambio.
@@ -243,10 +257,10 @@ Cada producto tiene un **código interno** único (`NC-000001`) que se genera au
   diferencia y el método de pago). Las devoluciones sin ticket ya no modifican ventas existentes.
 - **Número de ticket:** se genera solo, como código aleatorio único `T-XXXXXXXX` (letras y números, sin
   caracteres ambiguos). Antes de asignarlo el servidor verifica que no exista y el índice único de la
-  base impide cualquier repetición. Para regenerar los tickets viejos: `npm run migrar:tickets --prefix backend`
-  (dry-run) y `npm run migrar:tickets:aplicar --prefix backend` (aplica, con backup).
+  base impide cualquier repetición.
 - **Etiquetas:** desde el menú de acciones del producto en Depósito elegís el formato, la medida y la
-  cantidad (1–100):
+  cantidad (1–100). Si el producto tiene variantes, el diálogo pide **qué variante imprimir** y la etiqueta
+  lleva el código de esa variante más el talle/color en texto:
   - **Etiqueta:** una por página con la medida elegida (60×40 por defecto; ideal para rollo troquelado
     de tiquetera). Medidas: 60×40, 58×40, 50×30, 40×30 o personalizada.
   - **Hoja A4 (grilla):** acomoda las etiquetas por hoja según la medida (60×40 → 21 por hoja; 50×30 →
@@ -254,6 +268,9 @@ Cada producto tiene un **código interno** único (`NC-000001`) que se genera au
   Las etiquetas llevan siempre el Code-128 y el nombre; el QR y el precio se pueden activar o
   desactivar con los interruptores "Mostrar QR" y "Mostrar precio". En el diálogo de impresión
   conviene usar márgenes en 0, escala 100% y sin encabezados.
+
+Las etiquetas impresas antes de esta mejora (solo con el código del producto) siguen sirviendo: se escanean igual,
+pero si el producto tiene varias variantes con stock hay que elegir el talle/color en el selector.
 
 Endpoints: `GET /api/productos/codigo/:codigo` (buscar por código) y `GET /api/productos/siguiente-codigo`
 (admin; lo usa el formulario para mostrar el código al crear).

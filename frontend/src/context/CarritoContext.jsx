@@ -1,12 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CarritoContext, METODOS_PAGO } from './carritoContexto';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CarritoContext, METODOS_PAGO, claveItemCarrito } from './carritoContexto';
 import { crearVenta } from '../api/ventas';
 import { obtenerProducto } from '../api/productos';
+import { obtenerAjustesCuenta } from '../api/cuotas';
+import { precioVigente } from '../utils/precios';
 import { useAutenticacion } from './autenticacionContexto';
 import { useIosAlert } from '../components/alerts';
 import { obtenerMensajeErrorApi } from '../utils/apiError';
+import { CANTIDAD, FINANCIACION } from '../utils/validacion';
 import IosModal from '../components/ui/IosModal';
+import IosButton from '../components/ui/IosButton';
+import { IconCash } from '../components/ui/icons';
 import Ticket, { printTicket } from '../components/Ticket/Ticket';
+import CobrarPagoModal from '../components/Carrito/CobrarPagoModal';
+
+const hoyISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const DURACION_RESALTADO_MS = 3200;
 
 export const CarritoProvider = ({ children }) => {
   const { usuario } = useAutenticacion();
@@ -20,10 +33,27 @@ export const CarritoProvider = ({ children }) => {
   const [sellSplit, setSellSplit] = useState(false);
   const [sellMetodo2, setSellMetodo2] = useState('transferencia');
   const [sellMonto2, setSellMonto2] = useState('');
+  const [sellCliente, setSellCliente] = useState(null);
+  const [sellCuotas, setSellCuotas] = useState('1');
+  const [sellPrimerVencimiento, setSellPrimerVencimiento] = useState('');
+  const [sellAplicarInteres, setSellAplicarInteres] = useState(false);
+  const [sellInteres, setSellInteres] = useState('');
+  const [sellMora, setSellMora] = useState('');
+  const [ajustesCuenta, setAjustesCuenta] = useState(null);
   const [sellSaving, setSellSaving] = useState(false);
   const [lastSale, setLastSale] = useState(null);
   const [showTicketModal, setShowTicketModal] = useState(false);
+  const [showCobrarPago, setShowCobrarPago] = useState(false);
   const [saleVersion, setSaleVersion] = useState(0);
+  const [lastAdded, setLastAdded] = useState(null);
+  const lastAddedSeqRef = useRef(0);
+  const lastAddedTimerRef = useRef(null);
+
+  const pagoEnCuenta = lastSale ? (lastSale.pagos || []).find((p) => p.metodo === 'cuentaCorriente') : null;
+  const ventaEnCuenta = Boolean(lastSale?.cliente && pagoEnCuenta);
+  const montoCuentaVenta = Number(lastSale?.planCuotas?.montoFinanciado) > 0
+    ? Number(lastSale.planCuotas.montoFinanciado)
+    : Number(pagoEnCuenta?.monto) || 0;
 
   const redondear = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const cartTotal = redondear(
@@ -41,13 +71,42 @@ export const CarritoProvider = ({ children }) => {
     setSellSplit(false);
     setSellMetodo2('transferencia');
     setSellMonto2('');
+    setSellCliente(null);
+    setSellCuotas('1');
+    setSellPrimerVencimiento('');
+    setSellAplicarInteres(false);
+    setSellInteres('');
+    setSellMora('');
   }, [usuario?.nombre]);
+
+  useEffect(() => {
+    let activo = true;
+    obtenerAjustesCuenta()
+      .then((res) => {
+        if (activo) setAjustesCuenta(res.data);
+      })
+      .catch(() => {});
+    return () => {
+      activo = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (cart.length === 0) resetSell();
   }, [cart.length, resetSell]);
 
-  const addItem = useCallback((item) => {
+  const marcarUltimoAgregado = useCallback((item) => {
+    lastAddedSeqRef.current += 1;
+    setLastAdded({ key: claveItemCarrito(item), seq: lastAddedSeqRef.current, ts: Date.now() });
+    if (lastAddedTimerRef.current) clearTimeout(lastAddedTimerRef.current);
+    lastAddedTimerRef.current = setTimeout(() => setLastAdded(null), DURACION_RESALTADO_MS);
+  }, []);
+
+  useEffect(() => () => {
+    if (lastAddedTimerRef.current) clearTimeout(lastAddedTimerRef.current);
+  }, []);
+
+  const addItem = useCallback((item, opciones = {}) => {
     setCart((prev) => {
       const idx = prev.findIndex(
         (i) =>
@@ -60,7 +119,11 @@ export const CarritoProvider = ({ children }) => {
       copia[idx] = { ...copia[idx], cantidad: Number(copia[idx].cantidad || 0) + (Number(item.cantidad) || 1) };
       return copia;
     });
-  }, []);
+    if (opciones.reveal) {
+      marcarUltimoAgregado(item);
+      if (window.matchMedia('(max-width: 767px)').matches) setShowCartModal(true);
+    }
+  }, [marcarUltimoAgregado]);
 
   const removeFromCart = useCallback((idx) => {
     setCart((prev) => prev.filter((_, i) => i !== idx));
@@ -72,6 +135,7 @@ export const CarritoProvider = ({ children }) => {
 
   const clearCart = useCallback(() => {
     setCart([]);
+    setLastAdded(null);
   }, []);
 
   const openCart = useCallback(() => {
@@ -110,7 +174,11 @@ export const CarritoProvider = ({ children }) => {
         problemas.push(`"${item.nombre || 'Un producto'}" ya no existe.`);
         return item;
       }
-      const precio = Number(p.precio) || 0;
+      const precio = precioVigente(p);
+      if (p.enPapelera) {
+        problemas.push(`"${p.nombre}" fue eliminado y está en la papelera: restauralo o quitalo del carrito.`);
+        return { ...item, precio, nombre: p.nombre };
+      }
       if (Math.abs(precio - Number(item.precio)) > 0.001) {
         problemas.push(`"${p.nombre}" cambió de precio ($${Number(item.precio).toFixed(2)} → $${precio.toFixed(2)}).`);
         return { ...item, precio, nombre: p.nombre };
@@ -155,8 +223,27 @@ export const CarritoProvider = ({ children }) => {
       alert({ icon: 'warning', title: 'Montos incorrectos', message: 'El primer monto debe ser mayor a $0' });
       return;
     }
-    if (cart.some((i) => !Number.isFinite(i.precio) || i.precio <= 0 || !Number.isInteger(Number(i.cantidad)) || Number(i.cantidad) < 1)) {
-      alert({ icon: 'warning', title: 'Carrito inválido', message: 'Verifique cantidades y precios del carrito' });
+    if (cart.some((i) => !Number.isFinite(i.precio) || i.precio <= 0 || !Number.isInteger(Number(i.cantidad)) || Number(i.cantidad) < CANTIDAD.min || Number(i.cantidad) > CANTIDAD.max)) {
+      alert({ icon: 'warning', title: 'Carrito inválido', message: `Verifique cantidades (entre ${CANTIDAD.min} y ${CANTIDAD.max}) y precios del carrito` });
+      return;
+    }
+    if (sellInteres !== '' && (!Number.isFinite(Number(sellInteres)) || Number(sellInteres) < FINANCIACION.min || Number(sellInteres) > FINANCIACION.max)) {
+      alert({ icon: 'warning', title: 'Interés inválido', message: `El interés debe estar entre ${FINANCIACION.min}% y ${FINANCIACION.max}%` });
+      return;
+    }
+    if (sellMora !== '' && (!Number.isFinite(Number(sellMora)) || Number(sellMora) < FINANCIACION.min || Number(sellMora) > FINANCIACION.max)) {
+      alert({ icon: 'warning', title: 'Mora inválida', message: `La mora debe estar entre ${FINANCIACION.min}% y ${FINANCIACION.max}%` });
+      return;
+    }
+    const usaCuentaCorriente = sellSplit
+      ? sellMetodoPago === 'cuentaCorriente' || sellMetodo2 === 'cuentaCorriente'
+      : sellMetodoPago === 'cuentaCorriente';
+    if (usaCuentaCorriente && !sellCliente) {
+      alert({ icon: 'warning', title: 'Cliente requerido', message: 'Para cargar a la cuenta corriente elegí el cliente' });
+      return;
+    }
+    if (usaCuentaCorriente && sellPrimerVencimiento && sellPrimerVencimiento < hoyISO()) {
+      alert({ icon: 'warning', title: 'Vencimiento inválido', message: 'La fecha del primer vencimiento no puede ser anterior a hoy' });
       return;
     }
     setSellSaving(true);
@@ -188,15 +275,29 @@ export const CarritoProvider = ({ children }) => {
             { metodo: sellMetodo2, monto: Math.round(sellMonto2Num * 100) / 100 },
           ]
         : [{ metodo: sellMetodoPago, monto: Math.round(finalTotal * 100) / 100 }];
+      const cuotasNum = Math.min(Math.max(parseInt(sellCuotas, 10) || 1, 1), 24);
+      const planCuotas = usaCuentaCorriente
+        ? {
+            cantidadCuotas: cuotasNum,
+            aplicarInteres: sellAplicarInteres,
+            ...(sellInteres !== '' ? { interesPorcentaje: Number(sellInteres) } : {}),
+            ...(sellMora !== '' ? { tasaMoraMensual: Number(sellMora) } : {}),
+            ...(sellPrimerVencimiento ? { primerVencimiento: sellPrimerVencimiento } : {}),
+          }
+        : undefined;
       const res = await crearVenta({
         articulos: cart.map((i) => ({ producto: i.producto, cantidad: Number(i.cantidad), talle: i.talle, color: i.color || '' })),
         pagos,
         descuento: descuentoNum,
         offset: new Date().getTimezoneOffset(),
+        cliente: usaCuentaCorriente ? sellCliente?._id : undefined,
+        planCuotas,
       });
       setLastSale(res.data);
       setShowTicketModal(true);
+      setShowCobrarPago(false);
       setCart([]);
+      setLastAdded(null);
       setShowCartModal(false);
       setSaleVersion((v) => v + 1);
       toast({ message: 'Venta registrada' });
@@ -205,7 +306,7 @@ export const CarritoProvider = ({ children }) => {
     } finally {
       setSellSaving(false);
     }
-  }, [sellSaving, sellEmpleado, descuentoNum, sellSplit, sellMetodo2, sellMetodoPago, sellMonto2Num, finalTotal, sellMonto1, cart, validarCarrito, alert, toast]);
+  }, [sellSaving, sellEmpleado, descuentoNum, sellSplit, sellMetodo2, sellMetodoPago, sellMonto2Num, finalTotal, sellMonto1, cart, sellCliente, sellCuotas, sellPrimerVencimiento, sellAplicarInteres, sellInteres, sellMora, validarCarrito, alert, toast]);
 
   const handlePrintTicket = useCallback(async () => {
     if (!lastSale) return;
@@ -223,6 +324,7 @@ export const CarritoProvider = ({ children }) => {
     showCartModal,
     openCart,
     closeCart,
+    lastAdded,
     metodos: METODOS_PAGO,
     sellEmpleado,
     sellDescuento,
@@ -235,6 +337,19 @@ export const CarritoProvider = ({ children }) => {
     setSellMetodo2,
     sellMonto2,
     setSellMonto2,
+    sellCliente,
+    setSellCliente,
+    sellCuotas,
+    setSellCuotas,
+    sellPrimerVencimiento,
+    setSellPrimerVencimiento,
+    sellAplicarInteres,
+    setSellAplicarInteres,
+    sellInteres,
+    setSellInteres,
+    sellMora,
+    setSellMora,
+    ajustesCuenta,
     sellSaving,
     descuentoNum,
     finalTotal,
@@ -243,8 +358,10 @@ export const CarritoProvider = ({ children }) => {
     saleVersion,
   }), [
     cart, addItem, removeFromCart, updateCartItem, clearCart, showCartModal, openCart, closeCart,
+    lastAdded,
     sellEmpleado, sellDescuento, sellMetodoPago, setMetodoPago, sellSplit, toggleSplit,
-    sellMetodo2, sellMonto2, sellSaving, descuentoNum, finalTotal, sellMonto1, confirmSale, saleVersion,
+    sellMetodo2, sellMonto2, sellCliente, sellCuotas, sellPrimerVencimiento, sellAplicarInteres,
+    sellInteres, sellMora, ajustesCuenta, sellSaving, descuentoNum, finalTotal, sellMonto1, confirmSale, saleVersion,
   ]);
 
   return (
@@ -252,7 +369,10 @@ export const CarritoProvider = ({ children }) => {
       {children}
       <IosModal
         open={showTicketModal}
-        onClose={() => setShowTicketModal(false)}
+        onClose={() => {
+          setShowTicketModal(false);
+          setShowCobrarPago(false);
+        }}
         title="Venta registrada"
         cancelText="Cerrar"
         showCancel
@@ -266,11 +386,25 @@ export const CarritoProvider = ({ children }) => {
               {lastSale ? <Ticket sale={lastSale} /> : <p className="text-center">Cargando…</p>}
             </div>
           </div>
+          {ventaEnCuenta && (
+            <IosButton variant="tinted" onClick={() => setShowCobrarPago(true)} className="w-full">
+              <IconCash className="w-4 h-4" /> Cobrar pago
+            </IosButton>
+          )}
           <p className="text-xs text-ios-tertiary text-center leading-relaxed">
             Imprimí el ticket para entregar al cliente. También podés reimprimirlo desde la sección Ventas.
           </p>
         </div>
       </IosModal>
+
+      <CobrarPagoModal
+        open={showCobrarPago}
+        onClose={() => setShowCobrarPago(false)}
+        clienteId={lastSale?.cliente}
+        clienteNombre={lastSale?.clienteNombre}
+        referencia={lastSale?.ticketNumero}
+        montoSugerido={montoCuentaVenta}
+      />
     </CarritoContext.Provider>
   );
 };

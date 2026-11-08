@@ -1,17 +1,24 @@
 import mongoose from 'mongoose';
 import Producto from './ProductoModel.js';
+import AumentoPrecio from './AumentoPrecioModel.js';
 import Devolucion from '../Devolucion/DevolucionModel.js';
 import Venta from '../Venta/VentaModel.js';
 import Proveedor from '../Proveedor/ProveedorModel.js';
 import Contador from '../Venta/ContadorModel.js';
 import MovimientoStock from '../MovimientoStock/MovimientoStockModel.js';
-import { schemaCrearProducto, schemaActualizarProducto, schemaIntercambio, schemaAgregarStock, schemaMovimientoStock, schemaDeposito, schemaCatalogo, schemaPasarSalon } from './ProductoSchema.js';
+import Promocion from '../Promocion/PromocionModel.js';
+import { schemaCrearProducto, schemaActualizarProducto, schemaIntercambio, schemaAgregarStock, schemaMovimientoStock, schemaDeposito, schemaCatalogo, schemaPasarSalon, schemaAumentoPrecio } from './ProductoSchema.js';
 import { enviarEvento, enviarStockBajo } from '../../services/PushService.js';
 import { indiceDeVariante, depositoDe, catalogoDe } from '../../utils/VariantesUtils.js';
 import { ejecutarCambio } from '../Devolucion/DevolucionService.js';
 import { responderErrorDeServicio } from '../../utils/RespuestaErrorUtils.js';
 import { conReintentos } from '../../utils/TransaccionesUtils.js';
 import { filtroTienda, datosTienda, idTienda, conTienda } from '../../utils/TenantUtils.js';
+import { promocionesVigentes } from '../Promocion/PromocionService.js';
+import { ofertaDeProducto } from '../../utils/PreciosUtils.js';
+import { aCentavos, deCentavos } from '../../utils/DineroUtils.js';
+import { faltanCodigosDeVariante, variantePorCodigo } from '../../utils/CodigosVarianteUtils.js';
+import logger from '../../utils/LoggerUtils.js';
 
 const escaparRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -85,10 +92,44 @@ const registrarMovimiento = async ({ producto, talle, color, tipo, cantidad, emp
   );
 };
 
+const depositoTotalExpr = {
+  $cond: [
+    { $gt: [{ $size: { $ifNull: ['$variantes', []] } }, 0] },
+    { $sum: '$variantes.deposito' },
+    { $ifNull: ['$deposito', 0] },
+  ],
+};
+
+const salonTotalExpr = {
+  $cond: [
+    { $gt: [{ $size: { $ifNull: ['$variantes', []] } }, 0] },
+    { $sum: '$variantes.cantidad' },
+    { $ifNull: ['$cantidad', 0] },
+  ],
+};
+
+const esVerdadero = (valor) => valor === '1' || valor === 'true';
+
+const rechazarSiEnPapelera = (res, product) => {
+  if (!product?.enPapelera) return false;
+  res.status(409).json({
+    message: `"${product.nombre}" está en la papelera. Restauralo desde la papelera para operar con él.`,
+    code: 'EN_PAPELERA',
+  });
+  return true;
+};
+
 export const obtenerProductos = async (req, res, next) => {
   try {
     const { search, categoria } = req.query;
     const filter = filtroTienda(req);
+
+    const usuarioEsAdmin = req.usuario?.rol === 'admin';
+    if (esVerdadero(req.query.papelera) && usuarioEsAdmin) {
+      filter.enPapelera = true;
+    } else {
+      filter.enPapelera = { $ne: true };
+    }
 
     if (search) {
       const safe = escaparRegex(search);
@@ -96,17 +137,63 @@ export const obtenerProductos = async (req, res, next) => {
         { nombre: { $regex: safe, $options: 'i' } },
         { categoria: { $regex: safe, $options: 'i' } },
         { codigo: { $regex: safe, $options: 'i' } },
+        { 'variantes.codigo': { $regex: safe, $options: 'i' } },
       ];
     }
     const categoriaFiltro = String(categoria || '').trim();
     if (categoriaFiltro) {
       filter.categoria = { $regex: `^${escaparRegex(categoriaFiltro)}$`, $options: 'i' };
     }
+    if (esVerdadero(req.query.soloDeposito)) {
+      filter.$expr = { $gt: [depositoTotalExpr, 0] };
+    }
 
+    if (esVerdadero(req.query.soloIds)) {
+      const docs = await Producto.find(filter).select('_id').lean();
+      return res.json({ ids: docs.map((d) => d._id) });
+    }
+
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
     const limite = Math.min(Math.max(Number(req.query.limit) || 1000, 1), 2000);
-    const products = await Producto.find(filter).sort({ nombre: 1 }).limit(limite);
+    const conTotal = esVerdadero(req.query.conTotal);
+    const conMetricas = esVerdadero(req.query.conMetricas);
 
-    res.json(products);
+    const products = await Producto.find(filter).sort({ nombre: 1, _id: 1 }).skip(offset).limit(limite);
+    const promociones = await promocionesVigentes();
+    const mapeados = products.map((product) => ({
+      ...product.toJSON(),
+      oferta: ofertaDeProducto(product, promociones),
+    }));
+
+    if (!conTotal) {
+      return res.json(mapeados);
+    }
+
+    const total = await Producto.countDocuments(filter);
+    const respuesta = { productos: mapeados, total };
+
+    if (conMetricas) {
+      const [agregado] = await Producto.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            valorDepositoCentavos: {
+              $sum: { $multiply: [depositoTotalExpr, { $ifNull: ['$precio', 0] }] },
+            },
+            bajosSalon: {
+              $sum: { $cond: [{ $lte: [salonTotalExpr, { $ifNull: ['$stockMinimo', 0] }] }, 1, 0] },
+            },
+          },
+        },
+      ]);
+      respuesta.metricas = {
+        valorDeposito: Math.round(agregado?.valorDepositoCentavos || 0) / 100,
+        bajosSalon: agregado?.bajosSalon || 0,
+      };
+    }
+
+    res.json(respuesta);
   } catch (error) {
     next(error);
   }
@@ -116,7 +203,7 @@ export const obtenerCategorias = async (req, res, next) => {
   try {
     const tienda = idTienda(req);
     const categorias = await Producto.aggregate([
-      { $match: { ...(tienda ? { tienda: new mongoose.Types.ObjectId(tienda) } : {}), categoria: { $nin: [null, ''] } } },
+      { $match: { ...(tienda ? { tienda: new mongoose.Types.ObjectId(tienda) } : {}), categoria: { $nin: [null, ''] }, enPapelera: { $ne: true } } },
       {
         $group: {
           _id: { $toLower: { $trim: { input: '$categoria' } } },
@@ -141,14 +228,62 @@ export const obtenerProductoPorCodigo = async (req, res, next) => {
     if (!codigo) {
       return res.status(400).json({ message: 'El código es requerido' });
     }
-    const product = await buscarPorCodigoExacto(codigo, idTienda(req));
+    let product = await buscarPorCodigoExacto(codigo, idTienda(req));
+    let variante = null;
+    if (!product) {
+      product = await Producto.findOne(conTienda(idTienda(req), {
+        variantes: { $elemMatch: { codigo: { $regex: `^${escaparRegex(codigo)}$`, $options: 'i' } } },
+      }));
+      if (product) {
+        const encontrada = variantePorCodigo(product, codigo);
+        if (encontrada) variante = { talle: encontrada.talle || '', color: encontrada.color || '' };
+      }
+    }
     if (!product) {
       return res.status(404).json({ message: `No existe un producto con el código "${codigo}"` });
     }
-    res.json(product);
+    if (product.enPapelera) {
+      const esAdmin = req.usuario?.rol === 'admin';
+      return res.status(410).json({
+        message: esAdmin
+          ? `"${product.nombre}" está en la papelera. Restauralo desde la papelera para venderlo.`
+          : 'Este producto no está disponible para la venta.',
+        code: 'EN_PAPELERA',
+      });
+    }
+    const promociones = await promocionesVigentes();
+    res.json({
+      ...product.toJSON(),
+      oferta: ofertaDeProducto(product, promociones),
+      ...(variante ? { variante } : {}),
+    });
   } catch (error) {
     next(error);
   }
+};
+
+export const migrarCodigosVariante = async () => {
+  const productos = await Producto.find({
+    codigo: { $nin: [null, ''] },
+    'variantes.0': { $exists: true },
+  }).select('nombre codigo variantes siguienteSufijoVariante');
+
+  let migrados = 0;
+  for (const producto of productos) {
+    try {
+      if (!faltanCodigosDeVariante(producto)) continue;
+      await producto.save();
+      migrados += 1;
+    } catch (error) {
+      logger.warn('No se pudieron generar los códigos de variante del producto', {
+        motivo: error?.message || 'Error desconocido',
+        producto: producto.nombre || String(producto._id),
+        origen: 'backend',
+        lugar: 'migrarCodigosVariante',
+      });
+    }
+  }
+  return migrados;
 };
 
 export const siguienteCodigo = async (req, res, next) => {
@@ -167,7 +302,20 @@ export const obtenerProducto = async (req, res, next) => {
     if (!product) {
       return res.status(404).json({ message: 'Producto no encontrado' });
     }
-    res.json(product);
+    if (product.enPapelera && req.usuario?.rol !== 'admin') {
+      return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    const promociones = await promocionesVigentes();
+    const [ventas, devoluciones, movimientos] = await Promise.all([
+      Venta.countDocuments({ $or: [{ 'articulos.producto': product._id }, { producto: product._id }] }),
+      Devolucion.countDocuments({ $or: [{ producto: product._id }, { productoCargar: product._id }] }),
+      MovimientoStock.countDocuments({ producto: product._id }),
+    ]);
+    res.json({
+      ...product.toJSON(),
+      oferta: ofertaDeProducto(product, promociones),
+      uso: { ventas, devoluciones, movimientos },
+    });
   } catch (error) {
     next(error);
   }
@@ -184,7 +332,10 @@ export const crearProducto = async (req, res, next) => {
       });
     }
 
-    const existing = await Producto.findOne(filtroTienda(req, { nombre: { $regex: `^${escaparRegex(data.nombre)}$`, $options: 'i' } }));
+    const existing = await Producto.findOne(filtroTienda(req, {
+      nombre: { $regex: `^${escaparRegex(data.nombre)}$`, $options: 'i' },
+      enPapelera: { $ne: true },
+    }));
     if (existing) {
       return res.status(409).json({ message: `Ya existe un producto llamado "${data.nombre}"` });
     }
@@ -230,6 +381,7 @@ export const actualizarProducto = async (req, res, next) => {
       const existing = await Producto.findOne(filtroTienda(req, {
         nombre: { $regex: `^${escaparRegex(data.nombre)}$`, $options: 'i' },
         _id: { $ne: product._id },
+        enPapelera: { $ne: true },
       })).session(session);
       if (existing) {
         await session.abortTransaction();
@@ -371,6 +523,14 @@ export const actualizarProducto = async (req, res, next) => {
       }
     }
 
+    if (data.variantes) {
+      data.variantes = data.variantes.map((v) => {
+        const idxPrevio = indiceDeVariante(product, v.talle, v.color);
+        const codigoPrevio = idxPrevio === -1 ? null : product.variantes[idxPrevio]?.codigo;
+        return codigoPrevio ? { ...v, codigo: codigoPrevio } : v;
+      });
+    }
+
     Object.assign(product, data);
     await product.save({ session });
 
@@ -393,6 +553,179 @@ export const actualizarProducto = async (req, res, next) => {
   }
 };
 
+export const aplicarAumentoMasivo = async (req, res, next) => {
+  let session;
+  try {
+    const data = schemaAumentoPrecio.parse(req.body);
+    const ids = [...new Set(data.productos.map((id) => String(id)))];
+
+    session = await mongoose.startSession();
+    session.startTransaction();
+
+    const productos = await Producto.find(filtroTienda(req, {
+      _id: { $in: ids },
+      enPapelera: { $ne: true },
+    })).session(session);
+
+    if (productos.length === 0) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        message: 'Ninguno de los productos seleccionados está disponible (no existen o están en la papelera)',
+      });
+    }
+
+    const items = [];
+    const operaciones = [];
+    for (const product of productos) {
+      const centavosAnterior = aCentavos(product.precio);
+      const centavosNuevo = data.tipo === 'porcentaje'
+        ? Math.round(centavosAnterior * (1 + data.valor / 100))
+        : centavosAnterior + aCentavos(data.valor);
+      if (centavosNuevo === centavosAnterior) continue;
+      items.push({
+        producto: product._id,
+        nombre: product.nombre,
+        precioAnterior: deCentavos(centavosAnterior),
+        precioNuevo: deCentavos(centavosNuevo),
+      });
+      operaciones.push({
+        updateOne: {
+          filter: { _id: product._id, enPapelera: { $ne: true } },
+          update: { $set: { precio: deCentavos(centavosNuevo) } },
+        },
+      });
+    }
+
+    if (items.length === 0) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        message: 'El aumento no modifica el precio de los productos seleccionados',
+      });
+    }
+
+    await Producto.bulkWrite(operaciones, { session });
+    const [aumento] = await AumentoPrecio.create(
+      [{
+        tipo: data.tipo,
+        valor: data.valor,
+        cantidad: items.length,
+        items,
+        creadoPor: req.usuario?.nombre || '',
+        ...datosTienda(req),
+      }],
+      { session }
+    );
+
+    await session.commitTransaction();
+
+    const omitidos = ids.length - productos.length;
+    const sinCambios = productos.length - items.length;
+    const detalles = [];
+    if (omitidos > 0) detalles.push(`${omitidos} quedaron fuera (no existen o están en la papelera)`);
+    if (sinCambios > 0) detalles.push(`${sinCambios} sin cambios de precio`);
+
+    res.json({
+      message: `Precios actualizados en ${items.length} producto(s)${detalles.length > 0 ? `. ${detalles.join('; ')}` : ''}`,
+      cantidad: items.length,
+      omitidos,
+      sinCambios,
+      aumento,
+    });
+  } catch (error) {
+    await session?.abortTransaction().catch(() => {});
+    next(error);
+  } finally {
+    session?.endSession();
+  }
+};
+
+export const obtenerAumentos = async (req, res, next) => {
+  try {
+    const limite = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    const aumentos = await AumentoPrecio.find(filtroTienda(req))
+      .select('-items')
+      .sort({ fechaCreacion: -1 })
+      .limit(limite);
+    res.json(aumentos);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deshacerAumento = async (req, res, next) => {
+  let session;
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ message: 'Aumento inválido' });
+    }
+
+    session = await mongoose.startSession();
+    session.startTransaction();
+
+    const aumento = await AumentoPrecio.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
+    if (!aumento) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: 'Aumento no encontrado' });
+    }
+    if (aumento.deshecho) {
+      await session.abortTransaction();
+      return res.status(409).json({ message: 'Este aumento ya fue deshecho' });
+    }
+
+    const ids = aumento.items.map((item) => item.producto);
+    const productos = await Producto.find(filtroTienda(req, {
+      _id: { $in: ids },
+      enPapelera: { $ne: true },
+    })).session(session);
+    const porId = new Map(productos.map((product) => [String(product._id), product]));
+
+    const operaciones = [];
+    let omitidos = 0;
+    for (const item of aumento.items) {
+      const product = porId.get(String(item.producto));
+      if (!product || aCentavos(product.precio) !== aCentavos(item.precioNuevo)) {
+        omitidos += 1;
+        continue;
+      }
+      operaciones.push({
+        updateOne: {
+          filter: { _id: product._id, ...filtroTienda(req), enPapelera: { $ne: true } },
+          update: { $set: { precio: item.precioAnterior } },
+        },
+      });
+    }
+
+    if (operaciones.length === 0) {
+      await session.abortTransaction();
+      return res.status(409).json({
+        message: 'No se pudo deshacer: los precios de esos productos ya cambiaron después del aumento',
+        code: 'PRECIOS_CAMBIADOS',
+      });
+    }
+
+    await Producto.bulkWrite(operaciones, { session });
+    aumento.deshecho = true;
+    aumento.deshechoPor = req.usuario?.nombre || '';
+    aumento.deshechoEn = new Date();
+    await aumento.save({ session });
+
+    await session.commitTransaction();
+
+    res.json({
+      message: omitidos > 0
+        ? `Se restauraron ${operaciones.length} precio(s). ${omitidos} producto(s) no se tocaron porque su precio cambió después.`
+        : `Se restauraron ${operaciones.length} precio(s)`,
+      cantidad: operaciones.length,
+      omitidos,
+    });
+  } catch (error) {
+    await session?.abortTransaction().catch(() => {});
+    next(error);
+  } finally {
+    session?.endSession();
+  }
+};
+
 export const agregarStock = async (req, res, next) => {
   let session;
   try {
@@ -404,6 +737,10 @@ export const agregarStock = async (req, res, next) => {
     if (!product) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    if (rechazarSiEnPapelera(res, product)) {
+      await session.abortTransaction();
+      return;
     }
 
     if (product.variantes?.length > 0) {
@@ -450,6 +787,10 @@ export const agregarDeposito = async (req, res, next) => {
     if (!product) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    if (rechazarSiEnPapelera(res, product)) {
+      await session.abortTransaction();
+      return;
     }
 
     let delta;
@@ -567,6 +908,10 @@ export const reponerStock = async (req, res, next) => {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Producto no encontrado' });
     }
+    if (rechazarSiEnPapelera(res, product)) {
+      await session.abortTransaction();
+      return;
+    }
 
     const disponible = depositoDe(product, talle, color);
     let actualizado;
@@ -650,6 +995,10 @@ export const pasarAlSalon = async (req, res, next) => {
       if (!product) {
         await session.abortTransaction();
         return res.status(404).json({ message: `Producto ${item.producto} no encontrado` });
+      }
+      if (rechazarSiEnPapelera(res, product)) {
+        await session.abortTransaction();
+        return;
       }
       const disponible = depositoDe(product, item.talle, item.color);
       if (disponible < item.cantidad) {
@@ -774,6 +1123,10 @@ export const retirarStock = async (req, res, next) => {
     if (!product) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    if (rechazarSiEnPapelera(res, product)) {
+      await session.abortTransaction();
+      return;
     }
 
     const disponible = product.variantes?.length > 0
@@ -963,30 +1316,85 @@ export const eliminarProducto = async (req, res, next) => {
     if (!product) {
       return res.status(404).json({ message: 'Producto no encontrado' });
     }
-
-    const [ventas, devoluciones, movimientos] = await Promise.all([
-      Venta.countDocuments(filtroTienda(req, { $or: [{ 'articulos.producto': product._id }, { producto: product._id }] })),
-      Devolucion.countDocuments(filtroTienda(req, { $or: [{ producto: product._id }, { productoCargar: product._id }] })),
-      MovimientoStock.countDocuments(filtroTienda(req, { producto: product._id })),
-    ]);
-
-    if (ventas > 0 || devoluciones > 0 || movimientos > 0) {
-      return res.status(409).json({
-        message: `No se puede eliminar "${product.nombre}": tiene ${ventas} venta(s), ${devoluciones} devolución(es) y ${movimientos} movimiento(s) asociados. El historial quedaría huérfano.`,
-      });
+    if (product.enPapelera) {
+      return res.status(409).json({ message: `"${product.nombre}" ya está en la papelera` });
     }
-
-    await Producto.findOneAndDelete({ _id: product._id, ...filtroTienda(req) });
-    res.json({ message: 'Producto eliminado correctamente' });
+    product.enPapelera = true;
+    product.eliminadoEn = new Date();
+    product.eliminadoPor = req.usuario?.nombre || '';
+    await product.save();
+    res.json({ message: `"${product.nombre}" se movió a la papelera`, producto: product });
   } catch (error) {
     next(error);
   }
 };
 
+export const restaurarProducto = async (req, res, next) => {
+  try {
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) });
+    if (!product) {
+      return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    if (!product.enPapelera) {
+      return res.status(409).json({ message: `"${product.nombre}" no está en la papelera` });
+    }
+    const repetido = await Producto.findOne(filtroTienda(req, {
+      nombre: { $regex: `^${escaparRegex(product.nombre)}$`, $options: 'i' },
+      _id: { $ne: product._id },
+      enPapelera: { $ne: true },
+    }));
+    if (repetido) {
+      return res.status(409).json({
+        message: `Ya existe un producto activo llamado "${product.nombre}". Renombralo antes de restaurar este producto.`,
+        code: 'NOMBRE_EN_USO',
+      });
+    }
+    product.enPapelera = false;
+    product.eliminadoEn = null;
+    product.eliminadoPor = '';
+    await product.save();
+    res.json(product);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const eliminarDefinitivo = async (req, res, next) => {
+  let session;
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
+    const product = await Producto.findOne({ _id: req.params.id, ...filtroTienda(req) }).session(session);
+    if (!product) {
+      await session.abortTransaction();
+      return res.status(404).json({ message: 'Producto no encontrado' });
+    }
+    if (!product.enPapelera) {
+      await session.abortTransaction();
+      return res.status(409).json({
+        message: `"${product.nombre}" no está en la papelera. Primero eliminá el producto para poder borrarlo definitivamente.`,
+        code: 'NO_EN_PAPELERA',
+      });
+    }
+    await Producto.findOneAndDelete({ _id: product._id, ...filtroTienda(req) }).session(session);
+    await Promocion.updateMany(
+      { productos: product._id },
+      { $pull: { productos: product._id } }
+    ).session(session);
+    await session.commitTransaction();
+    res.json({ message: `"${product.nombre}" se eliminó definitivamente` });
+  } catch (error) {
+    await session?.abortTransaction().catch(() => {});
+    next(error);
+  } finally {
+    session?.endSession();
+  }
+};
+
 export const obtenerEstadisticasTablero = async (req, res, next) => {
   try {
-    const totalProductos = await Producto.countDocuments(filtroTienda(req));
-    const totalCategorias = await Producto.distinct('categoria', filtroTienda(req)).then((cats) => cats.length);
+    const totalProductos = await Producto.countDocuments(filtroTienda(req, { enPapelera: { $ne: true } }));
+    const totalCategorias = await Producto.distinct('categoria', filtroTienda(req, { enPapelera: { $ne: true } })).then((cats) => cats.length);
     const totalProveedores = await Proveedor.countDocuments(filtroTienda(req));
     const totalDevoluciones = await Devolucion.countDocuments(filtroTienda(req));
 
@@ -1003,7 +1411,7 @@ export const obtenerEstadisticasTablero = async (req, res, next) => {
 
 export const obtenerStockBajo = async (req, res, next) => {
   try {
-    const products = await Producto.find(filtroTienda(req));
+    const products = await Producto.find(filtroTienda(req, { enPapelera: { $ne: true } }));
 
     const lowStock = [];
     for (const product of products) {

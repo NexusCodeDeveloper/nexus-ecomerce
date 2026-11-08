@@ -153,19 +153,19 @@ const ScannerModal = ({ open, onClose, onLeer, continuo = false, titulo = 'Escan
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center px-4">
+    <div className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-sm flex items-center justify-center overflow-y-auto scanner-shell">
       <div
         role="dialog"
         aria-modal="true"
         aria-label={titulo}
-        className="w-full max-w-md bg-ios-surface rounded-[28px] overflow-hidden border border-ios-separator/40 shadow-ios-alert"
+        className="w-full max-w-md max-h-[92dvh] overflow-y-auto bg-ios-surface rounded-[28px] border border-ios-separator/40 shadow-ios-alert"
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-ios-separator/40">
           <p className="text-ios-label font-semibold">{titulo}</p>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-ios-hover/10 text-ios-secondary transition-colors"
+            className="p-1.5 btn-icono btn-icono-gris"
             aria-label="Cerrar escáner"
           >
             <IconX className="w-4 h-4" />
@@ -196,7 +196,7 @@ const ScannerModal = ({ open, onClose, onLeer, continuo = false, titulo = 'Escan
           <button
             type="button"
             onClick={alternarLinterna}
-            className="p-2 rounded-full bg-ios-surface2 text-ios-secondary hover:bg-ios-surface3 transition-colors"
+            className="p-2 btn-icono btn-icono-gris bg-ios-surface3 dark:bg-ios-surface2 ring-1 ring-ios-separator/40 hover:bg-ios-separator/40"
             aria-label="Linterna"
           >
             <IconSun className="w-4 h-4" />

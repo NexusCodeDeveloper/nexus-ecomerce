@@ -1,12 +1,13 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, Fragment, lazy, Suspense } from 'react';
 import { useLocation } from 'react-router-dom';
-import { obtenerVentas, obtenerEstadisticasVentas, obtenerMasVendidos, eliminarVenta, obtenerCierresCaja, eliminarCierreCaja, reenviarCorreoCierre } from '../../api/ventas';
+import { obtenerVentas, obtenerEstadisticasVentas, obtenerMasVendidos, eliminarVenta, obtenerCierresCaja, eliminarCierreCaja, reenviarCorreoCierre, reenviarReporteDia } from '../../api/ventas';
 import { useApi } from '../../hooks/useApi';
 import RetiroModal from './RetiroModal';
 import Ticket, { printTicket } from '../../components/Ticket/Ticket';
 import FormularioDevolucion from '../../components/FormularioDevolucion/FormularioDevolucion';
 import { obtenerMensajeErrorApi } from '../../utils/apiError';
 import { formatMoney, formatDate, formatDateSafe, formatDateShort } from '../../utils/format';
+import { validarRangoFechas } from '../../utils/validacion';
 import { escucharPush } from '../../services/GestorPush';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { useAutenticacion } from '../../context/autenticacionContexto';
@@ -17,18 +18,22 @@ import IosModal from '../../components/ui/IosModal';
 import IosToggle from '../../components/ui/IosToggle';
 import IosSegmented from '../../components/ui/IosSegmented';
 import { IosField, IosInput } from '../../components/ui/IosForm';
-import { IconChevronRight, IconChart, IconCash, IconBank, IconCard, IconTile } from '../../components/ui/icons';
+import { IconChevronRight, IconChart, IconCash, IconBank, IconCard, IconTile, IconWallet } from '../../components/ui/icons';
+
+const GraficosVentas = lazy(() => import('../../components/GraficosVentas/GraficosVentas'));
 
 const metodosIcon = {
   efectivo: IconCash,
   transferencia: IconBank,
   tarjeta: IconCard,
+  cuentaCorriente: IconWallet,
 };
 
 const metodosGradient = {
   efectivo: 'from-emerald-400 to-green-600',
   transferencia: 'from-sky-400 to-blue-600',
   tarjeta: 'from-violet-400 to-purple-600',
+  cuentaCorriente: 'from-orange-400 to-amber-600',
 };
 
 const today = () => {
@@ -89,14 +94,27 @@ const turnoBadge = (t) => {
   return 'bg-ios-surface2 text-ios-secondary';
 };
 
+const fechaInputLocal = (fecha) => {
+  const d = new Date(fecha);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 const pagoBadge = (metodo) => {
   if (metodo === 'efectivo') return 'bg-green-500/15 text-green-400';
   if (metodo === 'transferencia') return 'bg-blue-500/15 text-blue-400';
+  if (metodo === 'cuentaCorriente') return 'bg-orange-500/15 text-orange-400';
   return 'bg-purple-500/15 text-purple-400';
 };
 
 const pagoLabel = (metodo) =>
-  metodo === 'efectivo' ? 'Efectivo' : metodo === 'transferencia' ? 'Transferencia' : 'Tarjeta';
+  metodo === 'efectivo'
+    ? 'Efectivo'
+    : metodo === 'transferencia'
+      ? 'Transferencia'
+      : metodo === 'cuentaCorriente'
+        ? 'Cuenta corriente'
+        : 'Tarjeta';
 
 const getEstadoVenta = (s) => {
   if (s.estado === 'devuelta') return { label: 'Devuelto', cls: 'bg-ios-red/15 text-ios-red' };
@@ -108,6 +126,7 @@ const metodosResumen = [
   { key: 'efectivo', label: 'Efectivo', cls: 'text-green-400' },
   { key: 'transferencia', label: 'Transferencia', cls: 'text-blue-400' },
   { key: 'tarjeta', label: 'Tarjeta', cls: 'text-purple-400' },
+  { key: 'cuentaCorriente', label: 'Cta. corriente', cls: 'text-orange-400' },
 ];
 
 const DetailRow = ({ c }) => (
@@ -146,7 +165,8 @@ const RetirosInfo = ({ turno }) => {
   const totalRetiros = Number(turno.totalRetiros) || 0;
   const efectivoDevuelto = Number(turno.efectivoDevuelto) || 0;
   const totalDevoluciones = Number(turno.totalDevoluciones) || 0;
-  if (totalRetiros <= 0 && efectivoDevuelto <= 0 && totalDevoluciones <= 0) return null;
+  const cobrosCuentaCorriente = Number(turno.totalCobrosCuentaCorriente) || 0;
+  if (totalRetiros <= 0 && efectivoDevuelto <= 0 && totalDevoluciones <= 0 && cobrosCuentaCorriente <= 0) return null;
   const fondoInicial = Number(turno.fondoInicial) || 0;
   const efectivoEsperado = Number.isFinite(turno.efectivoEsperado)
     ? turno.efectivoEsperado
@@ -173,6 +193,12 @@ const RetirosInfo = ({ turno }) => {
         <div className="flex items-center justify-between text-[12px]">
           <span className="text-ios-secondary">Reintegros en efectivo</span>
           <span className="text-ios-red font-semibold whitespace-nowrap">-{formatMoney(efectivoDevuelto)}</span>
+        </div>
+      )}
+      {cobrosCuentaCorriente > 0 && (
+        <div className="flex items-center justify-between text-[12px]">
+          <span className="text-ios-secondary">Cobros cuenta corriente</span>
+          <span className="text-green-400 font-semibold whitespace-nowrap">+{formatMoney(cobrosCuentaCorriente)}</span>
         </div>
       )}
       <div className="flex items-center justify-between pt-1">
@@ -210,10 +236,16 @@ const Ventas = () => {
   const [resendingId, setResendingId] = useState(null);
   const [withdrawalOpen, setWithdrawalOpen] = useState(false);
 
-  const { caja, refresh: refreshCaja, openAbrir, openCerrar, cierreHoy, esDeHoy, openReabrir } = useCaja();
+  const errorRangoVentas = validarRangoFechas(desde, hasta);
+  const errorRangoCierres = validarRangoFechas(cDesde, cHasta);
+
+  const { caja, refresh: refreshCaja, openAbrir, openCerrar, diaCompleto, esDeHoy } = useCaja();
 
   const ventasApi = useApi(
     async () => {
+      if (desde && hasta && desde > hasta) {
+        return { data: { ventas: [], total: 0 }, stats: null, mostSold: [] };
+      }
       const tz = new Date().getTimezoneOffset();
       const [ventasRes, statsRes, mostSoldRes] = await Promise.all([
         obtenerVentas({ desde, hasta, offset: tz }),
@@ -231,6 +263,7 @@ const Ventas = () => {
   );
   const closesApi = useApi(
     async () => {
+      if (cDesde && cHasta && cDesde > cHasta) return [];
       const res = await obtenerCierresCaja({
         desde: cDesde,
         hasta: cHasta,
@@ -354,12 +387,39 @@ const Ventas = () => {
   };
 
   const handleResendCloseMail = async (id) => {
+    const ok = await confirm({
+      icon: 'warning',
+      title: '¿Reenviar el correo del cierre?',
+      message: 'Se enviará de nuevo el resumen del cierre de caja por correo.',
+      confirmText: 'Reenviar',
+    });
+    if (!ok) return;
     setResendingId(id);
     try {
       await reenviarCorreoCierre(id);
       toast({ message: 'Mail reenviado', duration: 2000 });
     } catch (err) {
       alert({ icon: 'error', title: 'Error', message: obtenerMensajeErrorApi(err, 'Error al reenviar el mail') });
+    } finally {
+      setResendingId(null);
+    }
+  };
+
+  const handleResendReport = async (fecha) => {
+    const ok = await confirm({
+      icon: 'warning',
+      title: '¿Reenviar el reporte del día?',
+      message: 'Se enviará por correo el total del día con el desglose por turno y el listado de ventas.',
+      confirmText: 'Reenviar',
+    });
+    if (!ok) return;
+    const id = `dia-${fecha}`;
+    setResendingId(id);
+    try {
+      await reenviarReporteDia({ fecha: fechaInputLocal(fecha), offset: new Date().getTimezoneOffset() });
+      toast({ message: 'Reporte reenviado', duration: 2000 });
+    } catch (err) {
+      alert({ icon: 'error', title: 'Error', message: obtenerMensajeErrorApi(err, 'Error al reenviar el reporte') });
     } finally {
       setResendingId(null);
     }
@@ -394,7 +454,62 @@ const Ventas = () => {
     setHasta(p.hasta());
   };
 
-  if (loading && activeTab === 'ventas' && !ticketModal && !returnSale && !withdrawalOpen) {
+  const filtroFechas = (
+    <div className="bg-ios-surface border border-ios-separator/30 rounded-3xl p-5 mb-4 space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+        <IosField label="Desde">
+          <IosInput
+            type="date"
+            max={today()}
+            invalid={Boolean(errorRangoVentas)}
+            value={desde}
+            onChange={(e) => {
+              setDesde(e.target.value);
+              setActivePeriodo('');
+            }}
+            className="w-full sm:w-auto"
+          />
+        </IosField>
+        <IosField label="Hasta">
+          <IosInput
+            type="date"
+            max={today()}
+            invalid={Boolean(errorRangoVentas)}
+            value={hasta}
+            onChange={(e) => {
+              setHasta(e.target.value);
+              setActivePeriodo('');
+            }}
+            className="w-full sm:w-auto"
+          />
+        </IosField>
+      </div>
+      {errorRangoVentas && <p className="text-ios-red text-xs font-medium">{errorRangoVentas}</p>}
+      <div className="grid grid-cols-2 gap-2 sm:flex">
+        {periodos.map((p) => (
+          <button
+            key={p.key}
+            onClick={() => selectPeriodo(p)}
+            className={`w-full sm:flex-1 px-3.5 py-2 rounded-ios-pill text-sm font-semibold transition-all duration-150 active:scale-[0.97] ${
+              activePeriodo === p.key ? 'btn-vivo btn-vivo-azul' : 'btn-vivo btn-vivo-gris'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  // La pestaña de gráficos es solo para admin: para el resto cae siempre en Ventas.
+  const tabEfectiva = !esAdmin && activeTab === 'graficos' ? 'ventas' : activeTab;
+  const opcionesTab = [
+    { value: 'ventas', label: 'Ventas' },
+    ...(esAdmin ? [{ value: 'graficos', label: 'Gráficos' }] : []),
+    { value: 'cierres', label: 'Cierres' },
+  ];
+
+  if (loading && tabEfectiva === 'ventas' && !ticketModal && !returnSale && !withdrawalOpen) {
     return <LoadingSpinner />;
   }
 
@@ -408,56 +523,48 @@ const Ventas = () => {
 
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <IosSegmented
-          options={[{ value: 'ventas', label: 'Ventas' }, { value: 'cierres', label: 'Cierres' }]}
-          value={activeTab}
+          options={opcionesTab}
+          value={tabEfectiva}
           onChange={setActiveTab}
           className="w-full sm:w-auto"
         />
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 w-full sm:w-auto">
           {caja ? (
             <div
-              className={`flex flex-1 sm:flex-none items-center gap-2 rounded-ios-pill pl-3.5 pr-1.5 py-1.5 border ${
+              className={`flex w-full sm:w-auto min-w-0 items-center gap-2 rounded-ios-pill pl-3.5 pr-1.5 py-1.5 border ${
                 esDeHoy ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-amber-500/10 border-amber-500/25'
               }`}
             >
-              <span className={`w-2 h-2 rounded-full shrink-0 ${esDeHoy ? 'bg-emerald-400' : 'bg-amber-400'}`} />
-              <span className={`text-xs font-semibold whitespace-nowrap ${esDeHoy ? 'text-emerald-300' : 'text-amber-300'}`}>
+              <span className={`w-2 h-2 rounded-full shrink-0 ${esDeHoy ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-amber-500 dark:bg-amber-400'}`} />
+              <span className={`min-w-0 flex-1 sm:flex-none truncate text-xs font-semibold ${esDeHoy ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}`}>
                 {esDeHoy
                   ? `Caja abierta ${new Date(caja.abiertaEn).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} · ${caja.abiertoPor}`
                   : `Caja abierta del ${formatDateShort(caja.fecha)} · ${caja.abiertoPor}`}
               </span>
               <button
                 onClick={openCerrar}
-                className={`shrink-0 px-3 py-1.5 rounded-ios-pill text-xs font-bold transition-colors ${
-                  esDeHoy
-                    ? 'bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'
-                    : 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
+                className={`shrink-0 px-3 py-1.5 rounded-ios-pill text-xs font-bold ${
+                  esDeHoy ? 'btn-vivo btn-vivo-verde' : 'btn-vivo btn-vivo-ambar'
                 }`}
               >
                 Cerrar caja
               </button>
             </div>
-          ) : cierreHoy ? (
-            <div className="flex flex-1 sm:flex-none items-center gap-2 bg-ios-surface2 border border-ios-separator/40 rounded-ios-pill pl-3.5 pr-1.5 py-1.5">
+          ) : diaCompleto ? (
+            <div className="flex w-full sm:w-auto min-w-0 items-center gap-2 bg-ios-surface2 border border-ios-separator/40 rounded-ios-pill pl-3.5 pr-1.5 py-1.5">
               <span className="w-2 h-2 rounded-full bg-ios-tertiary shrink-0" />
-              <span className="text-xs text-ios-secondary font-semibold whitespace-nowrap">Caja cerrada hoy</span>
-              {esAdmin ? (
-                <button
-                  onClick={openReabrir}
-                  className="shrink-0 px-3 py-1.5 rounded-ios-pill bg-ios-tint/20 text-ios-tint text-xs font-bold hover:bg-ios-tint/30 transition-colors"
-                >
-                  Reabrir caja
-                </button>
-              ) : (
-                <span className="shrink-0 px-3 py-1.5 text-[11px] text-ios-tertiary whitespace-nowrap">
-                  Solo el admin puede reabrirla
-                </span>
-              )}
+              <span className="min-w-0 flex-1 sm:flex-none truncate text-xs text-ios-secondary font-semibold">Caja cerrada hoy</span>
+              <button
+                onClick={() => setActiveTab('cierres')}
+                className="shrink-0 px-3 py-1.5 rounded-ios-pill btn-vivo btn-vivo-azul text-xs font-bold"
+              >
+                Ver cierres
+              </button>
             </div>
           ) : (
             <button
               onClick={openAbrir}
-              className="flex-1 sm:flex-none px-4 py-2 rounded-ios-pill bg-amber-500/15 border border-amber-500/30 text-amber-300 text-sm font-semibold hover:bg-amber-500/25 transition-colors"
+              className="w-full sm:w-auto px-4 py-2 rounded-ios-pill btn-vivo btn-vivo-ambar text-sm font-semibold"
             >
               Abrir caja
             </button>
@@ -465,7 +572,7 @@ const Ventas = () => {
           <IosButton
             variant="tinted"
             onClick={openWithdrawalModal}
-            className="flex-1 sm:flex-none"
+            className="w-full sm:w-auto"
             disabled={!caja || !esDeHoy}
             title={!esDeHoy ? 'La caja abierta es de un día anterior' : undefined}
           >
@@ -475,7 +582,7 @@ const Ventas = () => {
         </div>
       </div>
 
-      {activeTab === 'ventas' ? (
+      {tabEfectiva === 'ventas' ? (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 [&>*]:min-w-0">
             <div className="relative overflow-hidden rounded-3xl border border-ios-separator/30 bg-gradient-to-b from-ios-surface2/80 to-ios-surface p-5 shadow-ios-card">
@@ -507,47 +614,7 @@ const Ventas = () => {
             })}
           </div>
 
-          <div className="bg-ios-surface border border-ios-separator/30 rounded-3xl p-5 mb-4 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-              <IosField label="Desde">
-                <IosInput
-                  type="date"
-                  value={desde}
-                  onChange={(e) => {
-                    setDesde(e.target.value);
-                    setActivePeriodo('');
-                  }}
-                  className="w-full sm:w-auto"
-                />
-              </IosField>
-              <IosField label="Hasta">
-                <IosInput
-                  type="date"
-                  value={hasta}
-                  onChange={(e) => {
-                    setHasta(e.target.value);
-                    setActivePeriodo('');
-                  }}
-                  className="w-full sm:w-auto"
-                />
-              </IosField>
-            </div>
-            <div className="flex gap-2">
-              {periodos.map((p) => (
-                <button
-                  key={p.key}
-                  onClick={() => selectPeriodo(p)}
-                  className={`flex-1 px-3.5 py-2 rounded-ios-pill text-sm font-semibold transition-all ios-btn-press ${
-                    activePeriodo === p.key
-                      ? 'bg-ios-tint text-white shadow-[0_3px_10px_rgba(10,132,255,0.3)]'
-                      : 'bg-ios-surface2 text-ios-tertiary hover:text-ios-secondary'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </div>
+          {filtroFechas}
 
           <div className="bg-ios-surface border border-ios-separator/30 rounded-3xl p-5 mb-4 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-ios-secondary text-sm font-medium">
@@ -628,11 +695,11 @@ const Ventas = () => {
                                 strokeWidth={2.2}
                               />
                               <span className="font-semibold text-ios-label">
-                                {items[0]?.producto?.nombre || 'Producto'}
+                                {items[0]?.producto?.nombre || items[0]?.nombre || 'Producto'}
                                 {items.length > 1 && <span className="text-ios-tertiary font-normal"> +{items.length - 1} más</span>}
                               </span>
                               {getEstadoVenta(s) && (
-                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${getEstadoVenta(s).cls}`}>
+                                <span className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${getEstadoVenta(s).cls}`}>
                                   {getEstadoVenta(s).label}
                                 </span>
                               )}
@@ -646,7 +713,7 @@ const Ventas = () => {
                               {getPagos(s).map((p, i) => (
                                   <span
                                   key={i}
-                                  className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${pagoBadge(p.metodo)}`}
+                                  className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${pagoBadge(p.metodo)}`}
                                 >
                                   {pagoLabel(p.metodo)}
                                   <span className="ml-1 opacity-60 font-medium">{formatMoney(p.monto)}</span>
@@ -659,7 +726,7 @@ const Ventas = () => {
                             {esAdmin && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); handleDelete(s._id); }}
-                                className="text-ios-red hover:text-ios-red/80 text-xs border border-ios-red/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-red/10 transition-all font-semibold"
+                                className="btn-vivo btn-vivo-rojo text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                               >
                                 Eliminar
                               </button>
@@ -676,26 +743,26 @@ const Ventas = () => {
                                     <button
                                       onClick={(e) => { e.stopPropagation(); setReturnIsCambio(false); setReturnSale(s); }}
                                       disabled={s.estado === 'devuelta'}
-                                      className="text-ios-red hover:text-ios-red/80 text-xs border border-ios-red/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-red/10 transition-all font-semibold disabled:opacity-40 disabled:pointer-events-none"
+                                      className="btn-vivo btn-vivo-rojo text-xs px-2.5 py-1 rounded-ios-pill font-semibold disabled:opacity-40 disabled:pointer-events-none"
                                     >
                                       Devolver
                                     </button>
                                     <button
                                       onClick={(e) => { e.stopPropagation(); setReturnIsCambio(true); setReturnSale(s); }}
                                       disabled={s.estado === 'devuelta'}
-                                      className="text-ios-tint hover:text-ios-tint/80 text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold disabled:opacity-40 disabled:pointer-events-none"
+                                      className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold disabled:opacity-40 disabled:pointer-events-none"
                                     >
                                       Cambiar
                                     </button>
                                     <button
                                       onClick={(e) => { e.stopPropagation(); setTicketModal(s); }}
-                                      className="text-ios-tint hover:text-ios-tint/80 text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold"
+                                      className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                                     >
                                       Ver ticket
                                     </button>
                                     <button
                                       onClick={(e) => { e.stopPropagation(); imprimirTicket(s); }}
-                                      className="text-ios-tint hover:text-ios-tint/80 text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold"
+                                      className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                                     >
                                       Imprimir ticket
                                     </button>
@@ -715,7 +782,7 @@ const Ventas = () => {
                                   <tbody>
                                     {items.map((item, idx) => (
                                       <tr key={idx} className="border-t border-ios-separator/30">
-                                        <td className="px-4 py-2.5 pl-12 text-ios-label font-medium">{item.producto?.nombre || 'Producto'}</td>
+                                        <td className="px-4 py-2.5 pl-12 text-ios-label font-medium">{item.producto?.nombre || item.nombre || 'Producto'}</td>
                                         <td className="px-4 py-2.5 text-ios-tertiary">{item.producto?.categoria || '—'}</td>
                                         <td className="px-4 py-2.5 text-ios-label">{item.cantidad}</td>
                                         <td className="px-4 py-2.5 text-ios-tertiary">{item.talle || '—'}</td>
@@ -749,21 +816,21 @@ const Ventas = () => {
                 const totalUnidades = items.reduce((acc, i) => acc + (Number(i.cantidad) || 0), 0);
                 return (
                   <div key={s._id} className="bg-ios-surface border border-ios-separator/30 rounded-3xl p-4 shadow-ios-card">
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <p className="font-semibold text-ios-label truncate min-w-0">
-                        {items[0]?.producto?.nombre || 'Producto'}
+                    <div className="flex flex-wrap items-center gap-2 mb-2">
+                      <p className="font-semibold text-ios-label truncate min-w-0 w-full sm:w-auto sm:flex-1">
+                        {items[0]?.producto?.nombre || items[0]?.nombre || 'Producto'}
                         {items.length > 1 && <span className="text-ios-tertiary font-normal"> +{items.length - 1} más</span>}
                       </p>
                       {getEstadoVenta(s) && (
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap shrink-0 ${getEstadoVenta(s).cls}`}>
+                        <span className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap shrink-0 ${getEstadoVenta(s).cls}`}>
                           {getEstadoVenta(s).label}
                         </span>
                       )}
-                      <div className="flex flex-wrap gap-1 justify-end shrink-0">
+                      <div className="flex flex-wrap gap-1 justify-end min-w-0 ml-auto">
                         {getPagos(s).map((p, i) => (
                           <span
                             key={i}
-                            className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${pagoBadge(p.metodo)}`}
+                            className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold ${pagoBadge(p.metodo)}`}
                           >
                             {pagoLabel(p.metodo)}
                           </span>
@@ -783,14 +850,14 @@ const Ventas = () => {
                         {esAdmin && (
                           <button
                             onClick={() => handleDelete(s._id)}
-                            className="text-ios-red text-xs border border-ios-red/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-red/10 transition-all font-semibold"
+                            className="btn-vivo btn-vivo-rojo text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                           >
                             Eliminar
                           </button>
                         )}
                         <button
                           onClick={() => setExpandedId(isExpanded ? null : s._id)}
-                          className="text-ios-tint text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold"
+                          className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                         >
                           {isExpanded ? 'Ocultar' : 'Ver detalle'}
                         </button>
@@ -802,26 +869,26 @@ const Ventas = () => {
                           <button
                             onClick={() => { setReturnIsCambio(false); setReturnSale(s); }}
                             disabled={s.estado === 'devuelta'}
-                            className="text-ios-red text-xs border border-ios-red/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-red/10 transition-all font-semibold disabled:opacity-40 disabled:pointer-events-none"
+                            className="btn-vivo btn-vivo-rojo text-xs px-2.5 py-1 rounded-ios-pill font-semibold disabled:opacity-40 disabled:pointer-events-none"
                           >
                             Devolver
                           </button>
                           <button
                             onClick={() => { setReturnIsCambio(true); setReturnSale(s); }}
                             disabled={s.estado === 'devuelta'}
-                            className="text-ios-tint text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold disabled:opacity-40 disabled:pointer-events-none"
+                            className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold disabled:opacity-40 disabled:pointer-events-none"
                           >
                             Cambiar
                           </button>
                           <button
                             onClick={() => setTicketModal(s)}
-                            className="text-ios-tint text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold"
+                            className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                           >
                             Ver ticket
                           </button>
                           <button
                             onClick={() => imprimirTicket(s)}
-                            className="text-ios-tint text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold"
+                            className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                           >
                             Imprimir ticket
                           </button>
@@ -829,7 +896,7 @@ const Ventas = () => {
                         {items.map((item, idx) => (
                           <div key={idx} className="flex items-center justify-between gap-2 text-sm">
                             <div className="min-w-0">
-                              <p className="text-ios-label font-medium truncate">{item.producto?.nombre || 'Producto'}</p>
+                              <p className="text-ios-label font-medium truncate">{item.producto?.nombre || item.nombre || 'Producto'}</p>
                               <p className="text-xs text-ios-tertiary">
                                 {item.producto?.categoria || '—'}
                                 {item.talle ? ` · Talle ${item.talle}` : ''}
@@ -849,6 +916,13 @@ const Ventas = () => {
             )}
           </div>
         </>
+      ) : tabEfectiva === 'graficos' ? (
+        <>
+          {filtroFechas}
+          <Suspense fallback={<LoadingSpinner />}>
+            <GraficosVentas desde={desde} hasta={hasta} />
+          </Suspense>
+        </>
       ) : (
         <>
           {closesError && (
@@ -863,6 +937,8 @@ const Ventas = () => {
                 <IosField label="Desde">
                   <IosInput
                     type="date"
+                    max={today()}
+                    invalid={Boolean(errorRangoCierres)}
                     value={cDesde}
                     onChange={(e) => {
                       setCDesde(e.target.value);
@@ -873,6 +949,8 @@ const Ventas = () => {
                 <IosField label="Hasta">
                   <IosInput
                     type="date"
+                    max={today()}
+                    invalid={Boolean(errorRangoCierres)}
                     value={cHasta}
                     onChange={(e) => {
                       setCHasta(e.target.value);
@@ -881,6 +959,7 @@ const Ventas = () => {
                   />
                 </IosField>
               </div>
+              {errorRangoCierres && <p className="text-ios-red text-xs font-medium">{errorRangoCierres}</p>}
               <div className="flex items-center gap-3 shrink-0">
                 <span className="text-xs text-ios-tertiary uppercase tracking-wider font-semibold">
                   Vista por día
@@ -888,7 +967,7 @@ const Ventas = () => {
                 <IosToggle checked={cView === 'dia'} onChange={(v) => setCView(v ? 'dia' : 'turno')} />
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:flex">
               {periodos.map((p) => (
                 <button
                   key={p.key}
@@ -897,10 +976,8 @@ const Ventas = () => {
                     setCDesde(p.desde());
                     setCHasta(p.hasta());
                   }}
-                  className={`flex-1 px-3.5 py-2 rounded-ios-pill text-sm font-semibold transition-all ios-btn-press ${
-                    cActivePeriodo === p.key
-                      ? 'bg-ios-tint text-white shadow-[0_3px_10px_rgba(10,132,255,0.3)]'
-                      : 'bg-ios-surface2 text-ios-tertiary hover:text-ios-secondary'
+                  className={`w-full sm:flex-1 px-3.5 py-2 rounded-ios-pill text-sm font-semibold transition-all duration-150 active:scale-[0.97] ${
+                    cActivePeriodo === p.key ? 'btn-vivo btn-vivo-azul' : 'btn-vivo btn-vivo-gris'
                   }`}
                 >
                   {p.label}
@@ -925,6 +1002,7 @@ const Ventas = () => {
                     <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Efectivo</th>
                     <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Transferencia</th>
                     <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Tarjeta</th>
+                    <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Cta. cte.</th>
                     <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Cerrado</th>
                     <th className="text-left px-4 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Cerrado por</th>
                     <th className="text-right px-5 py-3.5 text-ios-tertiary font-semibold uppercase tracking-wider text-[11px]">Acción</th>
@@ -933,7 +1011,7 @@ const Ventas = () => {
                 <tbody>
                   {closes.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="text-center py-10 text-ios-tertiary text-sm">
+                      <td colSpan={11} className="text-center py-10 text-ios-tertiary text-sm">
                         No hay cierres en este periodo
                       </td>
                     </tr>
@@ -945,13 +1023,13 @@ const Ventas = () => {
                           {c.turnos ? (
                             <div className="flex flex-wrap gap-1">
                               {c.turnos.map((t, i) => (
-                                <span key={i} className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${turnoBadge(t.turno)}`}>
+                                <span key={i} className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold ${turnoBadge(t.turno)}`}>
                                   {turnoTableLabel(t.turno)}
                                 </span>
                               ))}
                             </div>
                           ) : (
-                            <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${turnoBadge(c.turno)}`}>
+                            <span className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold ${turnoBadge(c.turno)}`}>
                               {turnoTableLabel(c.turno)}
                             </span>
                           )}
@@ -961,6 +1039,7 @@ const Ventas = () => {
                         <td className="px-4 py-3.5 text-green-400 font-semibold whitespace-nowrap tabular-nums">{formatMoney(c.efectivo?.total || 0)} <span className="text-ios-tertiary text-xs font-medium">({c.efectivo?.cantidad || 0})</span></td>
                         <td className="px-4 py-3.5 text-blue-400 font-semibold whitespace-nowrap tabular-nums">{formatMoney(c.transferencia?.total || 0)} <span className="text-ios-tertiary text-xs font-medium">({c.transferencia?.cantidad || 0})</span></td>
                         <td className="px-4 py-3.5 text-purple-400 font-semibold whitespace-nowrap tabular-nums">{formatMoney(c.tarjeta?.total || 0)} <span className="text-ios-tertiary text-xs font-medium">({c.tarjeta?.cantidad || 0})</span></td>
+                        <td className="px-4 py-3.5 text-orange-400 font-semibold whitespace-nowrap tabular-nums">{formatMoney(c.cuentaCorriente?.total || 0)} <span className="text-ios-tertiary text-xs font-medium">({c.cuentaCorriente?.cantidad || 0})</span></td>
                         <td className="px-4 py-3.5 text-ios-tertiary text-xs whitespace-nowrap">{new Date(c.cerradaEn).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}</td>
                         <td className="px-4 py-3.5 text-ios-secondary">
                           {c.turnos
@@ -971,18 +1050,31 @@ const Ventas = () => {
                           <div className="flex items-center justify-end gap-2">
                             <button
                               onClick={() => viewCloseDetail(c)}
-                              className="text-ios-tint hover:text-ios-tint/80 text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold"
+                              className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                             >
                               Ver
                             </button>
+                            {c.turnos && esAdmin && (
+                              <button
+                                onClick={() => handleResendReport(c.fecha)}
+                                disabled={resendingId === `dia-${c.fecha}`}
+                                className={`text-xs px-2.5 py-1 rounded-ios-pill font-semibold ${
+                                  resendingId === `dia-${c.fecha}`
+                                    ? 'btn-vivo btn-vivo-ambar cursor-wait'
+                                    : 'btn-vivo btn-vivo-verde'
+                                }`}
+                              >
+                                {resendingId === `dia-${c.fecha}` ? 'Pendiente…' : 'Reenviar reporte'}
+                              </button>
+                            )}
                             {!c.turnos && esAdmin && (
                               <button
                                 onClick={() => handleResendCloseMail(c._id)}
                                 disabled={resendingId === c._id}
-                                className={`text-xs border px-2.5 py-1 rounded-ios-pill transition-all font-semibold ${
+                                className={`text-xs px-2.5 py-1 rounded-ios-pill font-semibold ${
                                   resendingId === c._id
-                                    ? 'text-amber-400 border-amber-500/30 bg-amber-500/10 cursor-wait'
-: 'text-emerald-400 hover:text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/10'
+                                    ? 'btn-vivo btn-vivo-ambar cursor-wait'
+                                    : 'btn-vivo btn-vivo-verde'
                                 }`}
                               >
                                 {resendingId === c._id ? 'Pendiente…' : 'Reenviar'}
@@ -991,7 +1083,7 @@ const Ventas = () => {
                             {!c.turnos && esAdmin && (
                               <button
                                 onClick={() => handleDeleteClose(c._id)}
-                                className="text-ios-red hover:text-ios-red/80 text-xs border border-ios-red/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-red/10 transition-all font-semibold"
+                                className="btn-vivo btn-vivo-rojo text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                               >
                                 Eliminar
                               </button>
@@ -1023,12 +1115,12 @@ const Ventas = () => {
                     <div className="flex flex-wrap gap-1 justify-end">
                       {c.turnos ? (
                         c.turnos.map((t, i) => (
-                          <span key={i} className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${turnoBadge(t.turno)}`}>
+                          <span key={i} className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold ${turnoBadge(t.turno)}`}>
                             {turnoTableLabel(t.turno)}
                           </span>
                         ))
                       ) : (
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${turnoBadge(c.turno)}`}>
+                        <span className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold ${turnoBadge(c.turno)}`}>
                           {turnoTableLabel(c.turno)}
                         </span>
                       )}
@@ -1046,28 +1138,41 @@ const Ventas = () => {
                       </div>
                     ))}
                   </div>
-                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-ios-separator/40">
-                    <p className="text-xs text-ios-tertiary">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-3 border-t border-ios-separator/40">
+                    <p className="text-xs text-ios-tertiary min-w-0 truncate">
                       {new Date(c.cerradaEn).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} ·{' '}
                       {c.turnos
                         ? [...new Set(c.turnos.map((t) => t.cerradoPor).filter(Boolean))].join(' / ') || '—'
                         : c.cerradoPor || '—'}
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <button
                         onClick={() => viewCloseDetail(c)}
-                        className="text-ios-tint text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold"
+                        className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                       >
                         Ver
                       </button>
+                      {c.turnos && esAdmin && (
+                        <button
+                          onClick={() => handleResendReport(c.fecha)}
+                          disabled={resendingId === `dia-${c.fecha}`}
+                          className={`text-xs px-2.5 py-1 rounded-ios-pill font-semibold ${
+                            resendingId === `dia-${c.fecha}`
+                              ? 'btn-vivo btn-vivo-ambar cursor-wait'
+                              : 'btn-vivo btn-vivo-verde'
+                          }`}
+                        >
+                          {resendingId === `dia-${c.fecha}` ? 'Pendiente…' : 'Reenviar reporte'}
+                        </button>
+                      )}
                       {!c.turnos && esAdmin && (
                         <button
                           onClick={() => handleResendCloseMail(c._id)}
                           disabled={resendingId === c._id}
-                          className={`text-xs border px-2.5 py-1 rounded-ios-pill transition-all font-semibold ${
+                          className={`text-xs px-2.5 py-1 rounded-ios-pill font-semibold ${
                             resendingId === c._id
-                              ? 'text-amber-400 border-amber-500/30 bg-amber-500/10 cursor-wait'
-                              : 'text-emerald-400 border-emerald-500/30'
+                              ? 'btn-vivo btn-vivo-ambar cursor-wait'
+                              : 'btn-vivo btn-vivo-verde'
                           }`}
                         >
                           {resendingId === c._id ? 'Pendiente…' : 'Reenviar'}
@@ -1076,7 +1181,7 @@ const Ventas = () => {
                       {!c.turnos && esAdmin && (
                         <button
                           onClick={() => handleDeleteClose(c._id)}
-                          className="text-ios-red text-xs border border-ios-red/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-red/10 transition-all font-semibold"
+                          className="btn-vivo btn-vivo-rojo text-xs px-2.5 py-1 rounded-ios-pill font-semibold"
                         >
                           Eliminar
                         </button>

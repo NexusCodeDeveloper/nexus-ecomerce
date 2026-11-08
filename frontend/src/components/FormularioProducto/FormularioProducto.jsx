@@ -5,6 +5,15 @@ import { obtenerSiguienteCodigo } from '../../api/productos';
 import { obtenerMensajeErrorApi } from '../../utils/apiError';
 import { printLabel } from '../../utils/printLabel';
 import { variantesParaEnviar } from '../../utils/productos';
+import {
+  CANTIDAD,
+  LIMITES,
+  limitarTexto,
+  PRECIO,
+  STOCK_MINIMO,
+  validarNumero,
+  validarTexto,
+} from '../../utils/validacion';
 
 const stockPorColor = (colores, variants) => {
   if (!colores || colores.length === 0) return null;
@@ -91,10 +100,20 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
   const handleAddColor = () => {
     const c = newColor.trim();
     if (!c) return;
+    const err = validarTexto(c, LIMITES.color, 'El color');
+    if (err) {
+      setErrores((e) => ({ ...e, colores: err }));
+      return;
+    }
     if (form.colores.includes(c)) {
       setNewColor('');
       return;
     }
+    if (form.colores.length >= 50) {
+      setErrores((e) => ({ ...e, colores: 'No se pueden agregar más de 50 colores' }));
+      return;
+    }
+    setErrores((e) => ({ ...e, colores: undefined }));
     setForm({ ...form, colores: [...form.colores, c] });
     setNewColor('');
   };
@@ -128,6 +147,7 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
     (sum, v) => sum + (Number(v.deposito) || 0),
     0
   );
+  const tieneVariantes = form.variants.length > 0;
 
   const totalCatalogo = form.variants.reduce(
     (sum, v) => sum + (Number(v.catalogo) || 0),
@@ -136,14 +156,42 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
 
   const validate = () => {
     const errs = {};
-    if (!form.nombre.trim()) errs.nombre = 'El nombre es obligatorio';
-    if (form.precio === '' || Number(form.precio) <= 0) errs.precio = 'El precio debe ser mayor a $0';
-    if (!form.categoria.trim()) errs.categoria = 'La categoría es obligatoria';
-    if (form.stockMinimo === '' || Number(form.stockMinimo) < 0) errs.stockMinimo = 'El stock mínimo no puede ser negativo';
+    const errNombre = validarTexto(form.nombre, LIMITES.nombreProducto, 'El nombre');
+    const errPrecio = validarNumero(form.precio, { ...PRECIO, etiqueta: 'El precio' });
+    const errCategoria = validarTexto(form.categoria, LIMITES.categoria, 'La categoría');
+    const errProveedor = validarTexto(form.proveedor, LIMITES.proveedor, 'El proveedor');
+    const errStockMinimo = validarNumero(form.stockMinimo, {
+      ...STOCK_MINIMO,
+      entero: true,
+      etiqueta: 'El stock mínimo',
+    });
+    if (errNombre) errs.nombre = errNombre;
+    if (errPrecio) errs.precio = errPrecio;
+    if (errCategoria) errs.categoria = errCategoria;
+    if (errProveedor) errs.proveedor = errProveedor;
+    if (errStockMinimo) errs.stockMinimo = errStockMinimo;
+    for (const v of form.variants) {
+      const errTalle = validarTexto(v.talle, LIMITES.talle, 'El talle');
+      const errDeposito = validarNumero(v.deposito, {
+        min: 0,
+        max: CANTIDAD.max,
+        entero: true,
+        etiqueta: 'La cantidad en depósito',
+        requerido: false,
+      });
+      if (errTalle) {
+        errs.variants = errTalle;
+        break;
+      }
+      if (errDeposito) {
+        errs.variants = errDeposito;
+        break;
+      }
+    }
     const claves = form.variants.map(
       (v) => `${(v.talle || '').trim().toLowerCase()}|${(v.color || '').trim().toLowerCase()}`
     );
-    if (new Set(claves).size !== claves.length) {
+    if (!errs.variants && new Set(claves).size !== claves.length) {
       errs.variants = 'Hay variantes repetidas (mismo talle y color)';
     }
     setErrores(errs);
@@ -156,6 +204,9 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
     const variantes = variantesParaEnviar(form.variants);
     const datos = {
       ...form,
+      nombre: form.nombre.trim(),
+      categoria: form.categoria.trim(),
+      proveedor: form.proveedor.trim(),
       codigo: form.codigo.trim(),
       precio: Number(form.precio),
       colores: form.colores,
@@ -192,8 +243,10 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
           <input
             type="text"
             required
+            minLength={LIMITES.nombreProducto.min}
+            maxLength={LIMITES.nombreProducto.max}
             value={form.nombre}
-            onChange={(e) => setForm({ ...form, nombre: e.target.value })}
+            onChange={(e) => setForm({ ...form, nombre: limitarTexto(e.target.value, LIMITES.nombreProducto.max) })}
             className={campoCls('nombre')}
           />
           {errText('nombre')}
@@ -206,21 +259,32 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
             type="number"
             step="0.01"
             required
-            min="0"
+            min={PRECIO.min}
+            max={PRECIO.max}
             value={form.precio}
-            onChange={(e) => setForm({ ...form, precio: e.target.value })}
+            onChange={(e) => setForm({ ...form, precio: limitarTexto(e.target.value, 11) })}
             className={campoCls('precio')}
           />
           {errText('precio')}
+          {initial?.oferta && (
+            <p className="text-ios-orange text-[11px] mt-1">
+              Tiene una oferta activa (
+              {initial.oferta.tipo === 'porcentaje' ? `-${initial.oferta.valor}%` : `-$${initial.oferta.valor}`}) hasta el{' '}
+              {new Date(initial.oferta.hasta).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}.
+              El precio de oferta se calcula sobre este precio normal.
+            </p>
+          )}
         </div>
         <div>
           <label className={labelCls}>Stock Mínimo</label>
           <input
             type="number"
             required
-            min="0"
+            min={STOCK_MINIMO.min}
+            max={STOCK_MINIMO.max}
+            step="1"
             value={form.stockMinimo}
-            onChange={(e) => setForm({ ...form, stockMinimo: e.target.value })}
+            onChange={(e) => setForm({ ...form, stockMinimo: limitarTexto(e.target.value, 6) })}
             className={campoCls('stockMinimo')}
           />
           <p className="text-ios-tertiary text-[11px] mt-1">
@@ -235,8 +299,9 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
         <div className="flex items-center gap-2 mb-2">
           <input
             type="text"
+            maxLength={LIMITES.color.max}
             value={newColor}
-            onChange={(e) => setNewColor(e.target.value)}
+            onChange={(e) => setNewColor(limitarTexto(e.target.value, LIMITES.color.max))}
             onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddColor())}
             placeholder="Ej: Azul, Rojo..."
             className="flex-1 px-3.5 py-2.5 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
@@ -253,14 +318,14 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
               return (
                 <span
                   key={c}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-ios-surface2 border border-ios-separator/40 text-ios-secondary"
+                  className="inline-flex items-center justify-center gap-1.5 leading-none text-xs font-medium px-2.5 py-1 rounded-full bg-ios-surface2 border border-ios-separator/40 text-ios-secondary"
                 >
                   {c}
                   <span className="text-ios-tertiary">({count})</span>
                   <button
                     type="button"
                     onClick={() => handleRemoveColor(c)}
-                    className="text-ios-tertiary hover:text-ios-red transition-colors"
+                    className="p-0.5 btn-icono btn-icono-rojo"
                   >
                     <IconX className="w-3 h-3" />
                   </button>
@@ -294,49 +359,74 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
                       Sin variantes aún — agregue talle y cantidad
                     </p>
                   )}
-                  <div className="space-y-2">
-                    {idxs.map((i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          placeholder="Talle (opc.)"
-                          value={form.variants[i].talle}
-                          onChange={(e) => updateVariant(i, 'talle', e.target.value)}
-                          className="flex-1 sm:flex-none w-24 px-3 py-2 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="Cant. depósito"
-                          value={form.variants[i].deposito}
-                          onChange={(e) => updateVariant(i, 'deposito', e.target.value)}
-                          className="flex-1 sm:flex-none w-24 px-3 py-2 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
-                        />
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="Cant. catálogo"
-                          value={form.variants[i].catalogo ?? ''}
-                          onChange={(e) => updateVariant(i, 'catalogo', e.target.value)}
-                          className="flex-1 sm:flex-none w-24 px-3 py-2 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeVariant(i)}
-                          className="p-2 text-ios-red hover:bg-ios-red/10 rounded-lg transition-all"
-                        >
-                          <IconX className="w-4 h-4" />
-                        </button>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] uppercase tracking-wider text-ios-tertiary font-semibold mb-1.5">Detalle</p>
+                      <div className="space-y-2">
+                        {idxs.map((i) => (
+                          <div key={i} className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="text"
+                              placeholder="Talle (opc.)"
+                              maxLength={LIMITES.talle.max}
+                              value={form.variants[i].talle}
+                              onChange={(e) => updateVariant(i, 'talle', limitarTexto(e.target.value, LIMITES.talle.max))}
+                              className="h-10 flex-1 min-w-[84px] sm:flex-none sm:w-28 px-3 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              max={CANTIDAD.max}
+                              step="1"
+                              placeholder="Cant. depósito"
+                              value={form.variants[i].deposito}
+                              onChange={(e) => updateVariant(i, 'deposito', limitarTexto(e.target.value, 6))}
+                              className="h-10 flex-1 min-w-[84px] sm:flex-none w-24 px-3 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
+                            />
+                            <input
+                              type="number"
+                              min="0"
+                              max={CANTIDAD.max}
+                              step="1"
+                              placeholder="Cant. catálogo"
+                              value={form.variants[i].catalogo ?? ''}
+                              onChange={(e) => updateVariant(i, 'catalogo', limitarTexto(e.target.value, 6))}
+                              className="h-10 flex-1 min-w-[84px] sm:flex-none w-24 px-3 bg-ios-surface rounded-ios-card text-ios-label placeholder:text-ios-tertiary focus:outline-none focus:ring-2 focus:ring-ios-tint/40 transition-all text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeVariant(i)}
+                              className="h-10 w-10 shrink-0 flex items-center justify-center btn-icono btn-icono-rojo rounded-lg"
+                            >
+                              <IconX className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                      <button
+                        type="button"
+                        onClick={() => addVariantToColor(color)}
+                        className="mt-2 text-xs text-ios-green hover:text-ios-green dark:hover:text-ios-green/80 transition-colors font-medium"
+                      >
+                        + Agregar talle
+                      </button>
+                    </div>
+                    {idxs.length > 0 && (
+                      <div className="sm:w-40 shrink-0">
+                        <p className="text-[10px] uppercase tracking-wider text-ios-tertiary font-semibold mb-1.5">Código</p>
+                        <div className="space-y-2">
+                          {idxs.map((i) => (
+                            <div
+                              key={i}
+                              className="h-10 flex items-center px-3 rounded-ios-card bg-ios-surface2/60 text-[11px] text-ios-tertiary tabular-nums truncate"
+                            >
+                              {form.variants[i].codigo || 'Se asigna al guardar'}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => addVariantToColor(color)}
-                    className="mt-2 text-xs text-ios-green hover:text-ios-green/80 transition-colors font-medium"
-                  >
-                    + Agregar talle
-                  </button>
                 </div>
               );
             })}
@@ -390,8 +480,10 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
           <input
             type="text"
             required
+            minLength={LIMITES.categoria.min}
+            maxLength={LIMITES.categoria.max}
             value={form.categoria}
-            onChange={(e) => setForm({ ...form, categoria: e.target.value })}
+            onChange={(e) => setForm({ ...form, categoria: limitarTexto(e.target.value, LIMITES.categoria.max) })}
             className={campoCls('categoria')}
             placeholder="Ej: Pantalones, Remeras..."
           />
@@ -401,11 +493,13 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
           <label className={labelCls}>Proveedor</label>
           <input
             type="text"
+            maxLength={LIMITES.proveedor.max}
             value={form.proveedor}
-            onChange={(e) => setForm({ ...form, proveedor: e.target.value })}
+            onChange={(e) => setForm({ ...form, proveedor: limitarTexto(e.target.value, LIMITES.proveedor.max) })}
             className={campoCls('proveedor')}
             placeholder="Nombre del proveedor"
           />
+          {errText('proveedor')}
         </div>
       </div>
 
@@ -416,24 +510,30 @@ const FormularioProducto = ({ initial, onSubmit, onCancel, isSubmitting: externa
             type="text"
             value={form.codigo}
             readOnly
+            maxLength={20}
+            pattern="^NC-\d{6}$"
             placeholder={generandoCodigo ? 'Generando…' : '—'}
             className={`${campoCls('codigo')} opacity-70 cursor-default`}
           />
-          <IosButton
-            type="button"
-            variant="tinted"
-            size="sm"
-            onClick={imprimirEtiqueta}
-            disabled={generandoCodigo || !form.codigo.trim()}
-          >
-            <IconPrint className="w-3.5 h-3.5" />
-            Etiqueta
-          </IosButton>
+          {!tieneVariantes && (
+            <IosButton
+              type="button"
+              variant="tinted"
+              size="sm"
+              onClick={imprimirEtiqueta}
+              disabled={generandoCodigo || !form.codigo.trim()}
+            >
+              <IconPrint className="w-3.5 h-3.5" />
+              Etiqueta
+            </IosButton>
+          )}
         </div>
         <p className="text-ios-tertiary text-[11px] mt-1">
           {generandoCodigo
             ? 'Generando código…'
-            : 'Se genera automáticamente al crear el producto y no se puede modificar.'}
+            : tieneVariantes
+              ? 'Cada variante recibe su propio código (por ejemplo, NC-000123-01). Las etiquetas se imprimen desde Depósito: menú del producto → Etiqueta. Si cambiás el talle o el color de una variante, al guardar recibe un código nuevo.'
+              : 'Se genera automáticamente al crear el producto y no se puede modificar.'}
         </p>
         {errText('codigo')}
       </div>

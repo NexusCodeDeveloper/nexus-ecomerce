@@ -11,6 +11,7 @@ import Proveedores from './pages/Proveedores/Proveedores'
 import Devoluciones from './pages/Devoluciones/Devoluciones'
 import Ventas from './pages/Ventas/Ventas'
 import Tickets from './pages/Tickets/Tickets'
+import Clientes from './pages/Clientes/Clientes'
 import Notificaciones from './pages/Notificaciones/Notificaciones'
 import Empleados from './pages/Empleados/Empleados'
 import MiTienda from './pages/MiTienda/MiTienda'
@@ -19,6 +20,7 @@ import TiendasPlataforma from './pages/Superadmin/Tiendas'
 import TiendaDetalle from './pages/Superadmin/TiendaDetalle'
 import PedidosSuperadmin from './pages/Superadmin/Pedidos'
 import Pedidos from './pages/Pedidos/Pedidos'
+import Papelera from './pages/Papelera/Papelera'
 import LoadingSpinner from './components/common/LoadingSpinner'
 import WelcomeOverlay from './components/Layout/WelcomeOverlay'
 import BannerPermisoPush from './components/BannerPermisoPush'
@@ -33,7 +35,7 @@ function App() {
 
   if (!autenticacion) {
     return (
-      <div className="flex items-center justify-center h-screen bg-ios-bg px-6">
+      <div className="flex items-center justify-center app-shell bg-ios-bg px-6">
         <div className="text-center max-w-sm">
           <p className="text-ios-label font-semibold mb-2">La app se actualizó</p>
           <p className="text-ios-secondary text-sm mb-4">
@@ -42,7 +44,7 @@ function App() {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="px-5 py-2.5 rounded-ios-pill bg-ios-tint text-white text-sm font-semibold"
+            className="px-5 py-2.5 rounded-ios-pill btn-vivo btn-vivo-azul text-sm font-semibold"
           >
             Recargar página
           </button>
@@ -55,7 +57,7 @@ function App() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-ios-bg">
+      <div className="flex items-center justify-center app-shell bg-ios-bg">
         <LoadingSpinner size="h-10 w-10" />
       </div>
     )
@@ -79,10 +81,12 @@ function App() {
           <Route path="ventas" element={<Ventas />} />
           <Route path="pedidos" element={<Pedidos />} />
           <Route path="tickets" element={<Tickets />} />
+          <Route path="clientes" element={<Clientes />} />
           <Route path="proveedores" element={<ProtectedRoute soloAdmin><Proveedores /></ProtectedRoute>} />
           <Route path="devoluciones" element={<Devoluciones />} />
           <Route path="notificaciones" element={<Notificaciones />} />
           <Route path="empleados" element={<ProtectedRoute soloAdmin><Empleados /></ProtectedRoute>} />
+          <Route path="papelera" element={<ProtectedRoute soloAdmin><Papelera /></ProtectedRoute>} />
         </Route>
         <Route
           path="/superadmin"

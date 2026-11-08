@@ -11,6 +11,13 @@ import RetiroCaja from '../../modules/RetiroCaja/RetiroCajaModel.js';
 import RetiroCajaDia from '../../modules/RetiroCaja/RetiroCajaDiaModel.js';
 import CierreCaja from '../../modules/Venta/CierreCajaModel.js';
 import Contador from '../../modules/Venta/ContadorModel.js';
+import Cliente from '../../modules/Cliente/ClienteModel.js';
+import MovimientoCuentaCorriente from '../../modules/MovimientoCuentaCorriente/MovimientoCuentaCorrienteModel.js';
+import CuotaCuentaCorriente from '../../modules/CuotaCuentaCorriente/CuotaCuentaCorrienteModel.js';
+import AjustesCuentaCorriente from '../../modules/AjustesCuentaCorriente/AjustesCuentaCorrienteModel.js';
+import Promocion from '../../modules/Promocion/PromocionModel.js';
+import SolicitudCliente from '../../modules/SolicitudCliente/SolicitudClienteModel.js';
+import AumentoPrecio from '../../modules/Producto/AumentoPrecioModel.js';
 
 let replSet;
 
@@ -29,6 +36,13 @@ export const startTestDB = async () => {
     RetiroCajaDia.init(),
     CierreCaja.init(),
     Contador.init(),
+    Cliente.init(),
+    MovimientoCuentaCorriente.init(),
+    CuotaCuentaCorriente.init(),
+    AjustesCuentaCorriente.init(),
+    Promocion.init(),
+    SolicitudCliente.init(),
+    AumentoPrecio.init(),
   ]);
 };
 

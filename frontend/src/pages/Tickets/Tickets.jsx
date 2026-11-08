@@ -22,11 +22,18 @@ const getItems = (s) =>
 const pagoBadge = (metodo) => {
   if (metodo === 'efectivo') return 'bg-green-500/15 text-green-400';
   if (metodo === 'transferencia') return 'bg-blue-500/15 text-blue-400';
+  if (metodo === 'cuentaCorriente') return 'bg-orange-500/15 text-orange-400';
   return 'bg-purple-500/15 text-purple-400';
 };
 
 const pagoLabel = (metodo) =>
-  metodo === 'efectivo' ? 'Efectivo' : metodo === 'transferencia' ? 'Transferencia' : 'Tarjeta';
+  metodo === 'efectivo'
+    ? 'Efectivo'
+    : metodo === 'transferencia'
+      ? 'Transferencia'
+      : metodo === 'cuentaCorriente'
+        ? 'Cuenta corriente'
+        : 'Tarjeta';
 
 const getNumero = (s) => (s.ticketNumero ? String(s.ticketNumero) : '—');
 
@@ -197,14 +204,14 @@ const Tickets = () => {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-ios-label tabular-nums tracking-wide">{getNumero(s)}</span>
                             {getEstadoTicket(s) && (
-                              <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${getEstadoTicket(s).cls}`}>
+                              <span className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${getEstadoTicket(s).cls}`}>
                                 {getEstadoTicket(s).label}
                               </span>
                             )}
                           </div>
                         </td>
                         <td className="px-4 py-3.5 text-ios-secondary">
-                          {items[0]?.producto?.nombre || 'Producto'}
+                          {items[0]?.producto?.nombre || items[0]?.nombre || 'Producto'}
                           {items.length > 1 && <span className="text-ios-tertiary"> +{items.length - 1} más</span>}
                           {items[0]?.producto?.codigo && (
                             <span className="block text-[11px] text-ios-tertiary mt-0.5">Cód. {items[0].producto.codigo}</span>
@@ -215,7 +222,7 @@ const Tickets = () => {
                         <td className="px-4 py-3.5">
                           <div className="flex flex-wrap gap-1">
                             {getPagos(s).map((p, i) => (
-                              <span key={i} className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${pagoBadge(p.metodo)}`}>
+                              <span key={i} className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${pagoBadge(p.metodo)}`}>
                                 {pagoLabel(p.metodo)}
                               </span>
                             ))}
@@ -225,7 +232,7 @@ const Tickets = () => {
                         <td className="px-5 py-3.5 text-right">
                           <button
                             onClick={(e) => openDropdown(e, s)}
-                            className="p-2 rounded-full hover:bg-ios-hover/10 text-ios-secondary transition-colors"
+                            className="p-2 btn-icono btn-icono-gris"
                             aria-label="Opciones del ticket"
                           >
                             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
@@ -259,20 +266,20 @@ const Tickets = () => {
                         </IconTile>
                         <p className="font-bold text-ios-label tabular-nums tracking-wide text-[15px]">{getNumero(s)}</p>
                         {getEstadoTicket(s) && (
-                          <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${getEstadoTicket(s).cls}`}>
+                          <span className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap ${getEstadoTicket(s).cls}`}>
                             {getEstadoTicket(s).label}
                           </span>
                         )}
                       </div>
                       <div className="flex flex-wrap gap-1 justify-end shrink-0">
                         {getPagos(s).map((p, i) => (
-                          <span key={i} className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${pagoBadge(p.metodo)}`}>
+                          <span key={i} className={`inline-flex items-center justify-center leading-none px-2 py-0.5 rounded-full text-[11px] font-semibold ${pagoBadge(p.metodo)}`}>
                             {pagoLabel(p.metodo)}
                           </span>
                         ))}
                         <button
                           onClick={(e) => openDropdown(e, s)}
-                          className="p-1.5 rounded-full hover:bg-ios-hover/10 text-ios-secondary transition-colors"
+                          className="p-1.5 btn-icono btn-icono-gris"
                           aria-label="Opciones del ticket"
                         >
                           <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
@@ -281,10 +288,10 @@ const Tickets = () => {
                         </button>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center justify-between gap-2 mb-3">
                       <p className="text-[22px] font-bold text-ios-green break-words min-w-0">{formatMoney(s.total)}</p>
-                      <p className="text-xs text-ios-tertiary shrink-0">
-                        {items[0]?.producto?.nombre || 'Producto'}
+                      <p className="text-xs text-ios-tertiary min-w-0 truncate text-right">
+                        {items[0]?.producto?.nombre || items[0]?.nombre || 'Producto'}
                         {items.length > 1 && ` +${items.length - 1} más`}
                       </p>
                     </div>
@@ -295,14 +302,14 @@ const Tickets = () => {
                       {isExpanded ? (
                         <button
                           onClick={() => setExpandedId(null)}
-                          className="text-ios-tint text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold shrink-0"
+                          className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold shrink-0"
                         >
                           Ocultar detalle
                         </button>
                       ) : (
                         <button
                           onClick={() => setExpandedId(s._id)}
-                          className="text-ios-tint text-xs border border-ios-tint/30 px-2.5 py-1 rounded-ios-pill hover:bg-ios-tint/10 transition-all font-semibold shrink-0"
+                          className="btn-vivo btn-vivo-azul text-xs px-2.5 py-1 rounded-ios-pill font-semibold shrink-0"
                         >
                           Ver detalle
                         </button>
@@ -321,7 +328,7 @@ const Tickets = () => {
                         {items.map((item, idx) => (
                           <div key={idx} className="flex items-center justify-between gap-2 text-sm">
                             <div className="min-w-0">
-                              <p className="text-ios-label font-medium truncate">{item.producto?.nombre || 'Producto'}</p>
+                              <p className="text-ios-label font-medium truncate">{item.producto?.nombre || item.nombre || 'Producto'}</p>
                               <p className="text-xs text-ios-tertiary">
                                 {item.producto?.codigo ? `Cód. ${item.producto.codigo} · ` : ''}
                                 {item.producto?.categoria || '—'}
